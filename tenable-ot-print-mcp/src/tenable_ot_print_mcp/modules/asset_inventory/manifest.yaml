@@ -9,8 +9,14 @@ params:
   - name: limit
     type: integer
     required: false
-    default: 100
-    description: Maximum number of matching assets to include (clamped to 500).
+    default: null
+    description: >-
+      Optional maximum number of matching assets to include. If omitted,
+      every matching asset is fetched (paged through server-side, no
+      artificial cap) -- a report should list everything that matches,
+      not just a first page. Only bounded by an internal 50,000-asset
+      safety circuit breaker meant to guard against a malformed
+      paginated response, not to cap legitimate results.
   - name: criticality_at_least
     type: string
     required: false

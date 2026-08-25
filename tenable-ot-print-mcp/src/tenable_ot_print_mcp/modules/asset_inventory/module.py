@@ -65,6 +65,17 @@ _EXPR_IN = "In"
 _EXPR_BETWEEN = "Between"
 _EXPR_AND = "And"
 
+# Per-request page size used while following pageInfo/endCursor (§0.9:
+# Dom's explicit call -- "there's no point in having a report if it
+# doesn't list all the assets" -- retired the old 500-asset hard cap;
+# `limit` is now optional and omitting it means "fetch every matching
+# asset"). _SAFETY_MAX_ASSETS is *not* a product limit the caller can
+# reach intentionally -- it's a circuit breaker so a malformed
+# `pageInfo` response (hasNextPage stuck true) can't spin this loop
+# forever. No real OT deployment should ever approach it.
+_PAGE_CHUNK = 500
+_SAFETY_MAX_ASSETS = 50_000
+
 _CRITICALITY_ENUM = {
     "none": "NoneCriticality",
     "low": "LowCriticality",
@@ -142,12 +153,20 @@ class AssetInventoryModule(_base.ReportModule):
                 f"Supported params: {sorted(self._KNOWN_PARAMS)}."
             )
 
-        limit = params.get("limit", 100)
-        try:
-            limit = int(limit)
-        except (TypeError, ValueError) as e:
-            raise ValueError(f"limit must be an integer, got {params.get('limit')!r}") from e
-        limit = max(1, min(limit, 500))
+        # `limit` is optional and now uncapped by default: omitting it
+        # means "fetch every matching asset" (§0.9). When given, it must
+        # be a positive integer; only clamped against the
+        # _SAFETY_MAX_ASSETS circuit breaker, not an artificial product
+        # ceiling.
+        limit = params.get("limit")
+        if limit is not None:
+            try:
+                limit = int(limit)
+            except (TypeError, ValueError) as e:
+                raise ValueError(f"limit must be an integer, got {params.get('limit')!r}") from e
+            if limit < 1:
+                raise ValueError(f"limit must be >= 1, got {limit}")
+            limit = min(limit, _SAFETY_MAX_ASSETS)
 
         criticality_at_least = params.get("criticality_at_least")
         if criticality_at_least is not None and criticality_at_least not in _CRITICALITY_ORDINAL:
@@ -210,22 +229,27 @@ class AssetInventoryModule(_base.ReportModule):
         # pattern EM-MCP's real tools/assets.py exposes to its LLM
         # caller ("keep paging while has_more is true") -- until either
         # `limit` matching assets have been collected or the server
-        # reports no more pages. `limit` is already clamped to <= 500 in
-        # validate_params, so this loop is bounded; the filter
-        # (criticality/subnet/search) is applied server-side via
-        # GraphQL, so it's the *matching* assets that get paged through
-        # up to that cap, not an arbitrary slice of the whole inventory.
+        # reports no more pages. As of §0.9, `limit` defaults to None
+        # (no cap): "there's no point in having a report if it doesn't
+        # list all the assets" (Dom). Only the _SAFETY_MAX_ASSETS
+        # circuit breaker bounds the unlimited case -- it exists purely
+        # to stop a malformed `pageInfo` response from looping forever,
+        # not as a product ceiling. The filter (criticality/subnet/
+        # search) is applied server-side via GraphQL, so it's the
+        # *matching* assets that get paged through, not an arbitrary
+        # slice of the whole inventory.
         icp_machine_id = await self._resolve_icp_machine_id(client, params)
         filt = _build_filter(params)
         search = params.get("search")
-        limit = params["limit"]
+        limit = params["limit"]  # None means "no cap -- fetch every match"
 
         nodes: list[dict[str, Any]] = []
         total_count = 0
         cursor: str | None = None
 
-        while len(nodes) < limit:
-            variables: dict[str, Any] = {"pageSize": limit - len(nodes)}
+        while limit is None or len(nodes) < limit:
+            page_size = _PAGE_CHUNK if limit is None else min(_PAGE_CHUNK, limit - len(nodes))
+            variables: dict[str, Any] = {"pageSize": page_size}
             if cursor is not None:
                 variables["after"] = cursor
             if filt is not None:
@@ -248,10 +272,15 @@ class AssetInventoryModule(_base.ReportModule):
             # infinite loop on a malformed response.
             if not page_info.get("hasNextPage") or not page_nodes or not cursor:
                 break
+            # Circuit breaker: stop even if the server still claims more
+            # pages exist. Not a real product ceiling -- see the
+            # _SAFETY_MAX_ASSETS comment above.
+            if len(nodes) >= _SAFETY_MAX_ASSETS:
+                break
 
         return {
             "total_count": total_count,
-            "nodes": nodes[:limit],
+            "nodes": nodes if limit is None else nodes[:limit],
         }
 
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
