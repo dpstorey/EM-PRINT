@@ -28,11 +28,18 @@ from typing import Any
 from ...tenable_client import TenableClient
 from .. import _base
 
-_QUERY_ASSETS = """
-query Q($pageSize: Int!, $filter: AssetExpressionsParams) {
-  assets(first: $pageSize, filter: $filter) {
-    totalCount
-    nodes {
+# Two variants of the same field selection, differing only in whether
+# the operation declares a `$filter` variable at all. Kept genuinely
+# separate (not "one query, sometimes-omitted variable") because we
+# saw live evidence that merely *declaring* $filter -- even when the
+# call supplies no value for it -- is enough to change Tenable's
+# server-side routing for this query on this deployment (see
+# design-notes.md Sec 0.5): the unfiltered case regressed to a 404
+# GraphQL error the moment $filter appeared in the query text, even
+# after variables stopped sending an explicit null. Unfiltered calls
+# get the exact query text that was confirmed working against real
+# data; filtered calls get the EM-MCP-equivalent query with $filter.
+_ASSET_FIELDS = """
       id
       name
       vendor
@@ -42,10 +49,20 @@ query Q($pageSize: Int!, $filter: AssetExpressionsParams) {
       lastSeen
       ips(first: 5) { nodes }
       risk { totalRisk pluginCount unresolvedEvents }
-    }
-  }
-}
 """
+
+_QUERY_ASSETS_PLAIN = (
+    "query Q($pageSize: Int!) { assets(first: $pageSize) { totalCount nodes { "
+    + _ASSET_FIELDS
+    + " } } }"
+)
+
+_QUERY_ASSETS_FILTERED = (
+    "query Q($pageSize: Int!, $filter: AssetExpressionsParams) { "
+    "assets(first: $pageSize, filter: $filter) { totalCount nodes { "
+    + _ASSET_FIELDS
+    + " } } }"
+)
 
 # Tenable's AssetExpressionsParams op vocabulary (see EM-MCP's
 # tools/_enums.py) -- only the two ops this module needs.
@@ -128,17 +145,16 @@ class AssetInventoryModule(_base.ReportModule):
         # least it's the *matching* assets that get capped by `limit`,
         # not an arbitrary first page of the whole inventory.
         filt = _build_filter(params)
-        variables: dict[str, Any] = {"pageSize": params["limit"]}
         if filt is not None:
-            # Mirror EM-MCP's tools/assets.py exactly: only include the
-            # `filter` key when there's an actual filter. Tenable's
-            # GraphQL backend handles an *omitted* filter argument fine,
-            # but an explicit `filter: null` apparently routes into a
-            # different (broken) internal path -- this was seen live as
-            # a GraphQL-level error wrapping an upstream "404 page not
-            # found", on every query once this always sent `filter: null`.
-            variables["filter"] = filt
-        data = await client.query(_QUERY_ASSETS, variables=variables)
+            data = await client.query(
+                _QUERY_ASSETS_FILTERED,
+                variables={"pageSize": params["limit"], "filter": filt},
+            )
+        else:
+            data = await client.query(
+                _QUERY_ASSETS_PLAIN,
+                variables={"pageSize": params["limit"]},
+            )
         connection = data.get("assets") or {}
         return {
             "total_count": connection.get("totalCount") or 0,
