@@ -2,10 +2,10 @@
 
 _Generated {{ generated_at }} — {{ returned_count }} of {{ total_count }} asset(s) shown._
 
-| Asset | Vendor | Model | Firmware | Criticality | IPs | Last Seen | Risk | Unresolved Events |
-|---|---|---|---|---|---|---|---|---|
+| {{ columns | map(attribute='label') | join(' | ') }} |
+|{% for c in columns %}---|{% endfor %}
 {% for a in assets -%}
-| {{ a.name }} | {{ a.vendor }} | {{ a.model }} | {{ a.firmware_version }} | {{ a.criticality }} | {{ a.ip }} | {{ a.last_seen }} | {{ a.total_risk if a.total_risk is not none else "" }} | {{ a.unresolved_events if a.unresolved_events is not none else "" }} |
+| {{ a.cells | join(' | ') }} |
 {% endfor %}
 {% if not assets %}
 _No assets matched the given filters._

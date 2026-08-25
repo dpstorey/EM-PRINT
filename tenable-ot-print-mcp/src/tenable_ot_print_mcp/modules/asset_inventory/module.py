@@ -17,13 +17,21 @@ at scale: fetch_data() below follows `pageInfo.hasNextPage` +
 requests as needed, so pushing the filter into the query itself means
 the whole EM/ICP inventory gets filtered before that cap applies --
 not just whatever happened to fit in one page.
+
+`columns` (§0.10) lets a caller pick which fields show up in the
+report and in what order, out of every field this module knows how to
+project (`_COLUMN_REGISTRY` below). The GraphQL query always fetches
+the full registry's worth of fields regardless of which columns were
+actually requested -- `columns` is a *display* projection, not a
+*fetch* filter, which keeps the query static and avoids the risk of
+dynamically assembling GraphQL query text per request.
 """
 
 from __future__ import annotations
 
 import ipaddress
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 
 from ...tenable_client import TenableClient
 from .. import _base
@@ -39,6 +47,25 @@ from .. import _base
 # further evidence the declared-but-unused $filter mattered at all.
 # Reunified back to one query to match EM-MCP's real, working shape
 # rather than carrying forward an unnecessary workaround.
+#
+# Field selection (§0.10) is the union of EM-MCP's real, production
+# `_ASSET_BASE` fragment (id/name/type/superType/category/vendor/model/
+# firmwareVersion/os/family/description/location/purdueLevel/
+# criticality/hidden/runStatus/extendedRunStatus/firstSeen/lastSeen/
+# lastUpdate/lifecycleStatus/ips/macs/segments/risk/customField1-10 --
+# all confirmed working in EM-MCP's daily production use) plus a few
+# additional fields pyTenable's OT GraphQL asset schema documents
+# (tenable/ot/graphql/schema/assets.py) but EM-MCP itself doesn't
+# select: `serial`, `slot`, `backplane { name size }`,
+# `osDetails { architecture version }`, `runStatusTime`,
+# `attackVector`. Those last few are schema-documented but NOT yet
+# proven against a live query the way the EM-MCP-matched fields are --
+# if a live report ever errors here, GraphQL failures are all-or-
+# nothing per request (one bad field name breaks the whole fetch, not
+# just that column), so that's the first place to look. `ips`/`macs`
+# raised to `first: 50` (from the earlier `first: 5`) to match EM-MCP's
+# real fragment -- incidentally closes the "an asset with >5 NICs gets
+# truncated" gap flagged in design-notes.md §4.
 _QUERY_ASSETS = """
 query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $search: String) {
   assets(first: $pageSize, after: $after, filter: $filter, search: $search) {
@@ -47,13 +74,45 @@ query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $searc
     nodes {
       id
       name
+      type
+      superType
+      category
       vendor
       model
       firmwareVersion
+      os
+      osDetails { name architecture version }
+      family
+      description
+      location
+      purdueLevel
       criticality
+      hidden
+      runStatus
+      runStatusTime
+      extendedRunStatus
+      lifecycleStatus
+      firstSeen
       lastSeen
-      ips(first: 5) { nodes }
+      lastUpdate
+      serial
+      slot
+      backplane { name size }
+      ips(first: 50) { nodes }
+      macs(first: 50) { nodes }
+      segments(first: 50) { nodes { name } }
+      attackVector
       risk { totalRisk pluginCount unresolvedEvents }
+      customField1
+      customField2
+      customField3
+      customField4
+      customField5
+      customField6
+      customField7
+      customField8
+      customField9
+      customField10
     }
   }
 }
@@ -101,6 +160,119 @@ def _display_criticality(raw: str | None) -> str:
     return _CRITICALITY_DISPLAY.get((raw or "").strip().lower(), "None")
 
 
+def _fmt_risk(value: Any) -> Any:
+    return f"{value:.1f}" if isinstance(value, (int, float)) else value
+
+
+def _join_nodes(connection: dict[str, Any] | None) -> str:
+    return " ".join((connection or {}).get("nodes") or [])
+
+
+def _join_segment_names(connection: dict[str, Any] | None) -> str:
+    names = [s.get("name") for s in (connection or {}).get("nodes") or [] if s.get("name")]
+    return " ".join(names)
+
+
+def _yes_no(value: Any) -> Any:
+    if value is None:
+        return value
+    return "Yes" if value else "No"
+
+
+def _render_cell(value: Any) -> str:
+    """Final str-and-escape pass applied to every table cell,
+    regardless of which column it came from.
+
+    render.py generates report HTML by running this module's rendered
+    Markdown through python-markdown's `tables` extension (see
+    render.py's docstring), not a separate HTML template -- so an
+    unescaped literal "|" in a cell gets misread as a column
+    separator, and an embedded newline breaks the one-row-per-line
+    table format. That was already handled for the hand-picked
+    original 9 columns (none of which could realistically contain
+    either); now that `columns` (§0.10) opens up free-text fields
+    like `description` and the 10 custom-field slots -- values real
+    operators type themselves -- both are realistic enough to guard
+    against here, once, for every column, rather than per-getter.
+    """
+    if value is None or value == "":
+        return ""
+    text = str(value).replace("|", "\|")
+    return " ".join(text.split())
+
+
+# Column registry (§0.10): every field this module can project into a
+# report column, keyed by a stable name a caller passes via `columns`.
+# Each entry is (display label, getter(raw GraphQL asset node) -> raw
+# value | None) -- getters return an unformatted value (or None/""),
+# and `_render_cell` above does the final str-and-escape pass uniformly
+# for every column afterwards.
+_COLUMN_REGISTRY: dict[str, tuple[str, Callable[[dict[str, Any]], Any]]] = {
+    "asset_id": ("Asset ID", lambda n: n.get("id")),
+    "name": ("Asset", lambda n: n.get("name") or "(unnamed)"),
+    "type": ("Type", lambda n: n.get("type")),
+    "super_type": ("Super Type", lambda n: n.get("superType")),
+    "category": ("Category", lambda n: n.get("category")),
+    "vendor": ("Vendor", lambda n: n.get("vendor")),
+    "model": ("Model", lambda n: n.get("model")),
+    "firmware_version": ("Firmware", lambda n: n.get("firmwareVersion")),
+    "os": ("OS", lambda n: n.get("os")),
+    "os_version": ("OS Version", lambda n: (n.get("osDetails") or {}).get("version")),
+    "os_architecture": ("OS Architecture", lambda n: (n.get("osDetails") or {}).get("architecture")),
+    "family": ("Family", lambda n: n.get("family")),
+    "description": ("Description", lambda n: n.get("description")),
+    "location": ("Location", lambda n: n.get("location")),
+    "purdue_level": ("Purdue Level", lambda n: n.get("purdueLevel")),
+    "criticality": ("Criticality", lambda n: _display_criticality(n.get("criticality"))),
+    "hidden": ("Hidden", lambda n: _yes_no(n.get("hidden"))),
+    "run_status": ("Run Status", lambda n: n.get("runStatus")),
+    "run_status_time": ("Run Status Time", lambda n: n.get("runStatusTime")),
+    "extended_run_status": ("Extended Run Status", lambda n: n.get("extendedRunStatus")),
+    "lifecycle_status": ("Lifecycle Status", lambda n: n.get("lifecycleStatus")),
+    "first_seen": ("First Seen", lambda n: n.get("firstSeen")),
+    "last_seen": ("Last Seen", lambda n: n.get("lastSeen")),
+    "last_update": ("Last Update", lambda n: n.get("lastUpdate")),
+    "serial": ("Serial Number", lambda n: n.get("serial")),
+    "slot": ("Slot", lambda n: n.get("slot")),
+    "backplane_name": ("Backplane", lambda n: (n.get("backplane") or {}).get("name")),
+    "backplane_size": ("Backplane Size", lambda n: (n.get("backplane") or {}).get("size")),
+    "ip": ("IPs", lambda n: _join_nodes(n.get("ips"))),
+    "mac": ("MACs", lambda n: _join_nodes(n.get("macs"))),
+    "segments": ("Segments", lambda n: _join_segment_names(n.get("segments"))),
+    "attack_vector": ("Attack Vector", lambda n: n.get("attackVector")),
+    "total_risk": ("Risk", lambda n: _fmt_risk((n.get("risk") or {}).get("totalRisk"))),
+    "plugin_count": ("Plugin Count", lambda n: (n.get("risk") or {}).get("pluginCount")),
+    "unresolved_events": ("Unresolved Events", lambda n: (n.get("risk") or {}).get("unresolvedEvents")),
+    "custom_field_1": ("Custom Field 1", lambda n: n.get("customField1")),
+    "custom_field_2": ("Custom Field 2", lambda n: n.get("customField2")),
+    "custom_field_3": ("Custom Field 3", lambda n: n.get("customField3")),
+    "custom_field_4": ("Custom Field 4", lambda n: n.get("customField4")),
+    "custom_field_5": ("Custom Field 5", lambda n: n.get("customField5")),
+    "custom_field_6": ("Custom Field 6", lambda n: n.get("customField6")),
+    "custom_field_7": ("Custom Field 7", lambda n: n.get("customField7")),
+    "custom_field_8": ("Custom Field 8", lambda n: n.get("customField8")),
+    "custom_field_9": ("Custom Field 9", lambda n: n.get("customField9")),
+    "custom_field_10": ("Custom Field 10", lambda n: n.get("customField10")),
+}
+
+_KNOWN_COLUMNS = frozenset(_COLUMN_REGISTRY)
+
+# Omitting `columns` must reproduce exactly the report shape every
+# earlier §0.x entry in design-notes.md was tested against -- this is
+# that original hand-picked 9-column set, unchanged.
+_DEFAULT_COLUMNS = (
+    "name",
+    "vendor",
+    "model",
+    "firmware_version",
+    "criticality",
+    "ip",
+    "last_seen",
+    "total_risk",
+    "unresolved_events",
+)
+
+
 def _build_filter(params: dict[str, Any]) -> dict | None:
     """Translate this module's natural-language params into Tenable's
     `AssetExpressionsParams` expression tree. Returns None when no
@@ -135,7 +307,15 @@ class AssetInventoryModule(_base.ReportModule):
     template_name = "template.md.j2"
 
     _KNOWN_PARAMS = frozenset(
-        {"limit", "criticality_at_least", "subnet", "site_uuid", "site_name", "search"}
+        {
+            "limit",
+            "criticality_at_least",
+            "subnet",
+            "site_uuid",
+            "site_name",
+            "search",
+            "columns",
+        }
     )
 
     def validate_params(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -186,6 +366,41 @@ class AssetInventoryModule(_base.ReportModule):
         site_name = params.get("site_name")
         search = params.get("search")
 
+        # `columns` (§0.10): optional list of column names (or a
+        # comma-separated string -- LLM callers sometimes serialize
+        # arrays that way), validated against the full _COLUMN_REGISTRY,
+        # deduped, and order-preserving so a caller can also control
+        # column order. Omitting it reproduces the original 9-column
+        # report (_DEFAULT_COLUMNS) so existing callers see no change.
+        columns_param = params.get("columns")
+        if columns_param is None:
+            columns = list(_DEFAULT_COLUMNS)
+        else:
+            if isinstance(columns_param, str):
+                columns_param = [c.strip() for c in columns_param.split(",")]
+            if not isinstance(columns_param, (list, tuple)):
+                raise ValueError(
+                    f"columns must be a list of column names, got {columns_param!r}"
+                )
+            seen: set[str] = set()
+            columns = []
+            for raw in columns_param:
+                key = str(raw).strip().lower()
+                if not key:
+                    continue
+                if key not in _KNOWN_COLUMNS:
+                    raise ValueError(
+                        f"Unknown column {key!r}. Available columns: {sorted(_KNOWN_COLUMNS)}."
+                    )
+                if key not in seen:
+                    seen.add(key)
+                    columns.append(key)
+            if not columns:
+                raise ValueError(
+                    "columns must not be empty; omit it entirely to use the default columns "
+                    f"{list(_DEFAULT_COLUMNS)}."
+                )
+
         return {
             "limit": limit,
             "criticality_at_least": criticality_at_least,
@@ -193,6 +408,7 @@ class AssetInventoryModule(_base.ReportModule):
             "site_uuid": site_uuid,
             "site_name": site_name,
             "search": search,
+            "columns": columns,
         }
 
     async def _resolve_icp_machine_id(self, client: TenableClient, params: dict[str, Any]) -> str:
@@ -237,7 +453,10 @@ class AssetInventoryModule(_base.ReportModule):
         # not as a product ceiling. The filter (criticality/subnet/
         # search) is applied server-side via GraphQL, so it's the
         # *matching* assets that get paged through, not an arbitrary
-        # slice of the whole inventory.
+        # slice of the whole inventory. `columns` (§0.10) doesn't
+        # change this query at all -- every registry field is always
+        # fetched; column selection is applied later, in
+        # to_markdown_context, as a display projection.
         icp_machine_id = await self._resolve_icp_machine_id(client, params)
         filt = _build_filter(params)
         search = params.get("search")
@@ -284,42 +503,20 @@ class AssetInventoryModule(_base.ReportModule):
         }
 
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+        column_keys: list[str] = params["columns"]
+        columns = [{"key": key, "label": _COLUMN_REGISTRY[key][0]} for key in column_keys]
+
         assets = []
         for node in data.get("nodes") or []:
-            ips = (node.get("ips") or {}).get("nodes") or []
-            risk = node.get("risk") or {}
-            total_risk = risk.get("totalRisk")
-            assets.append(
-                {
-                    "name": node.get("name") or "(unnamed)",
-                    "vendor": node.get("vendor") or "",
-                    "model": node.get("model") or "",
-                    "firmware_version": node.get("firmwareVersion") or "",
-                    "criticality": _display_criticality(node.get("criticality")),
-                    # An asset can legitimately have several NICs/IPs; showing
-                    # only ips[0] silently dropped the rest. Space-joined so
-                    # the cell wraps on word boundaries in the HTML output
-                    # (the theme's CSS never sets white-space: nowrap on
-                    # table cells -- see _HTML_SHELL in render.py) rather than
-                    # overflowing the column. A plain space needs no Markdown
-                    # escaping, unlike a literal "|" would (render.py produces
-                    # the HTML by running this Markdown through
-                    # python-markdown's `tables` extension, so an unescaped
-                    # "|" in a cell would be misread as a column separator).
-                    # GraphQL fetch is still capped at the first 5 IPs (see
-                    # _QUERY_ASSETS* above) -- fine for Phase 0, but an asset
-                    # with more than 5 interfaces would still be truncated.
-                    "ip": " ".join(ips) if ips else "",
-                    "last_seen": node.get("lastSeen") or "",
-                    "total_risk": f"{total_risk:.1f}" if isinstance(total_risk, (int, float)) else "",
-                    "unresolved_events": risk.get("unresolvedEvents"),
-                }
-            )
+            cells = [_render_cell(_COLUMN_REGISTRY[key][1](node)) for key in column_keys]
+            assets.append({"cells": cells})
+
         return {
             "report_title": "Asset Inventory",
             "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "total_count": data.get("total_count", 0),
             "returned_count": len(assets),
+            "columns": columns,
             "assets": assets,
         }
 
