@@ -502,6 +502,19 @@ class AssetInventoryModule(_base.ReportModule):
             "nodes": nodes if limit is None else nodes[:limit],
         }
 
+    def list_columns(self) -> list[dict[str, str]]:
+        """Every column this module can project via `columns`, in
+        registry order -- not part of the ReportModule ABC (only this
+        module supports column selection so far); the MCP-side
+        `list_available_columns` tool checks for this method with
+        `getattr(..., None)` rather than requiring every module to
+        implement it."""
+        return [{"key": key, "label": label} for key, (label, _getter) in _COLUMN_REGISTRY.items()]
+
+    def default_columns(self) -> list[str]:
+        """Columns used when `columns` is omitted -- see `list_available_columns`."""
+        return list(_DEFAULT_COLUMNS)
+
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         column_keys: list[str] = params["columns"]
         columns = [{"key": key, "label": _COLUMN_REGISTRY[key][0]} for key in column_keys]

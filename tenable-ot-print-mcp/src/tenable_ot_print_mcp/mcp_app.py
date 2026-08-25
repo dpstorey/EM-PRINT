@@ -51,6 +51,13 @@ Operating principles:
    Note this reports *past* jobs (ok/error, from the audit log); since
    Phase 0 runs synchronously there is no separate "still running"
    state to report for a job in progress right now.
+
+5. Some modules accept a `columns` param to pick which fields appear
+   in the report and in what order. Call `list_available_columns` for
+   a module before guessing column names -- a wrong name is rejected
+   outright rather than silently ignored, so it's cheaper to check
+   first than to retry after an error. A module that doesn't support
+   column selection returns `columns: null` from that call.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"
@@ -155,6 +162,32 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
             "html_bytes": result.html_bytes,
             "returned_count": context.get("returned_count"),
             "total_count": context.get("total_count"),
+        }
+
+    @mcp.tool(
+        title="List available report columns",
+        description=(
+            "Lists the columns a report module can include via its `columns` param "
+            "(key + display label), and which columns are used when `columns` is "
+            "omitted. Not every module supports column selection -- if it doesn't, "
+            "`columns` and `default_columns` come back null."
+        ),
+    )
+    async def list_available_columns(module: str) -> dict[str, Any]:
+        instance = load_module(module)
+        list_columns = getattr(instance, "list_columns", None)
+        default_columns = getattr(instance, "default_columns", None)
+        if list_columns is None:
+            return {
+                "module": module,
+                "columns": None,
+                "default_columns": None,
+                "note": "This module does not support column selection.",
+            }
+        return {
+            "module": module,
+            "columns": list_columns(),
+            "default_columns": default_columns() if default_columns else None,
         }
 
     @mcp.tool(

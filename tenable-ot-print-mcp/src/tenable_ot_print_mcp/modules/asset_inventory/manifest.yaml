@@ -52,16 +52,12 @@ params:
     default: null
     description: >-
       Optional list of column names to include, in the order they
-      should appear (also accepts a comma-separated string). Omit to
-      use the default 9-column report: name, vendor, model,
+      should appear (also accepts a comma-separated string; case-
+      insensitive; duplicates collapsed). Call `list_available_columns`
+      for this module's full key/label list and its default set before
+      guessing names -- an unknown name is rejected outright rather
+      than silently dropped. Omitting `columns` uses that default set
+      (the original 9-column report: name, vendor, model,
       firmware_version, criticality, ip, last_seen, total_risk,
-      unresolved_events. Unknown names are rejected with the full list
-      of valid ones. Available columns: asset_id, name, type,
-      super_type, category, vendor, model, firmware_version, os,
-      os_version, os_architecture, family, description, location,
-      purdue_level, criticality, hidden, run_status, run_status_time,
-      extended_run_status, lifecycle_status, first_seen, last_seen,
-      last_update, serial, slot, backplane_name, backplane_size, ip,
-      mac, segments, attack_vector, total_risk, plugin_count,
-      unresolved_events, custom_field_1..custom_field_10.
+      unresolved_events).
 output_formats: [markdown, html]
