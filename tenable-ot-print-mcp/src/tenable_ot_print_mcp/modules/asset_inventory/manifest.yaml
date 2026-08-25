@@ -1,0 +1,19 @@
+name: asset_inventory
+title: Asset Inventory
+description: >
+  Lists OT assets from the configured Tenable OT / Enterprise Manager
+  connection with vendor, model, firmware, criticality, and risk
+  summary fields. Sample module proving the Phase 0 pipeline
+  (GraphQL fetch -> Markdown -> HTML) end-to-end.
+params:
+  - name: limit
+    type: integer
+    required: false
+    default: 100
+    description: Maximum number of assets to include (clamped to 500).
+  - name: criticality_at_least
+    type: string
+    required: false
+    default: null
+    description: "Optional minimum criticality filter: none|low|medium|high."
+output_formats: [markdown, html]

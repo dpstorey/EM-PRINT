@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tenable-ot-print-mcp"
+version = "0.1.0"
+description = "MCP server that generates Tenable OT print reports (Markdown/HTML/PDF) via Enterprise Manager GraphQL, writing output straight to a mounted filestore."
+readme = "README.md"
+requires-python = ">=3.12"
+# License intentionally unset — this is a new, separate repo from the
+# open-source tenable-ot-mcp (EM-MCP). Decide licensing before publishing
+# anywhere, including any Agentic Exchange listing.
+authors = [
+    { name = "Dominic Storey", email = "dstorey@tenable.com" },
+]
+keywords = ["mcp", "tenable", "ot-security", "reporting"]
+
+dependencies = [
+    "mcp[cli]>=1.28,<2",
+    "httpx>=0.27",
+    "uvicorn[standard]>=0.30",
+    "starlette>=0.37",
+    "cryptography>=43",
+    "click>=8.1",
+    "jinja2>=3.1",
+    "pydantic>=2.7",
+    "PyYAML>=6.0",
+    "markdown>=3.6",
+]
+
+[project.optional-dependencies]
+# Phase 1: PDF rendering. Not installed by default yet — Phase 0 ships
+# Markdown + HTML only. See design-notes.md in the project.
+pdf = [
+    "weasyprint>=62",
+]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+tenable-ot-print-mcp = "tenable_ot_print_mcp.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tenable_ot_print_mcp"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Setup complete</title>
+<style>
+  body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 560px; margin: 3rem auto; color: #1a1a1a; }
+  code, .token { background: #f2f2f2; padding: 0.6rem; display: block; word-break: break-all; margin: 0.5rem 0 1.5rem; }
+  .warn { color: #a40000; font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Setup complete</h1>
+<p>MCP endpoint URL:</p>
+<code>{{ mcp_url }}</code>
+<p>Bearer token (shown once &mdash; store it in your MCP client's config now):</p>
+<code class="token">{{ bearer_token }}</code>
+<p class="warn">Restart this container/process so the MCP endpoint comes up against the saved configuration.</p>
+</body>
+</html>

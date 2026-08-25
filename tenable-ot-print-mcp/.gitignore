@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+output/
+config.enc
+config.key
+audit.jsonl
+cert.pem
+key.pem
+.DS_Store

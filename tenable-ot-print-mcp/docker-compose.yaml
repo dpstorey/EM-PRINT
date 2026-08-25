@@ -1,0 +1,36 @@
+services:
+  tenable-ot-print:
+    container_name: tot-print-mcp
+
+    build:
+      context: ./tenable-ot-print-mcp
+
+    image: tenable-ot-print-mcp:local
+
+    ports:
+      - "3309:40444"
+
+    environment:
+      MCP_TLS_DISABLE: "1"
+
+    volumes:
+      - ./tenable-ot-print-mcp-data:/data
+      # Filestore mount point is protocol-agnostic by design (design-notes.md
+      # section 4.3): point this at whatever share you've already mounted on
+      # the host, or a plain local directory for now.
+      - ./output:/output
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:40444/healthz', timeout=3).status == 200 else 1)
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+    restart: unless-stopped
