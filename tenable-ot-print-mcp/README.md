@@ -47,6 +47,8 @@ MCP_TLS_DISABLE=1 tenable-ot-print-mcp serve
 # then open http://127.0.0.1:40444/setup
 ```
 
+If your EM/ICP's TLS cert is signed by an internal/private CA, drop it (PEM format) at `./data/tenable-ca.pem` (matches `MCP_DATA_DIR`'s default) before hitting `/setup`, or point `MCP_TENABLE_CA_BUNDLE` at it. See `config.get_ca_bundle_path()`.
+
 ## Open items (tracked in the project's design-notes.md)
 
 - Decide how `tenable_client.py` / `tls.py` / `config.py` / `auth.py`

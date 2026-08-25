@@ -16,6 +16,7 @@
 <body>
 <h1>Tenable OT Print Report MCP &mdash; first-run setup</h1>
 <p>Enter the Enterprise Manager (or ICP) GraphQL endpoint this server will use to generate reports.</p>
+<p style="color:#555;font-size:0.9rem;">If your EM/ICP's TLS certificate is signed by an internal/private CA, drop that CA cert (PEM format) at <code>./data/tenable-ca.pem</code> (or point <code>MCP_TENABLE_CA_BUNDLE</code> at it) before clicking Save &mdash; otherwise leave &quot;Verify TLS certificate&quot; checked and this uses the public CA bundle.</p>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 <form method="post" action="/setup">
   <label for="tenable_url">Tenable OT / EM URL</label>

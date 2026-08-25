@@ -78,12 +78,17 @@ class TenableClient:
         icp_machine_id: str | None = None,
         tls_verify: bool = True,
         timeout: float = 30.0,
+        ca_bundle: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._icp_machine_id = icp_machine_id.strip("/") if icp_machine_id else None
         self._tls_verify = tls_verify
         self._timeout = timeout
+        # httpx's `verify` accepts a bool OR a path to a custom CA bundle.
+        # A configured ca_bundle path always wins over the tls_verify flag --
+        # see config.get_ca_bundle_path() for how it's resolved.
+        self._verify: bool | str = ca_bundle if ca_bundle else tls_verify
         self._site_name_to_machine_id: dict[str, str] = {}
 
     def _endpoint_for(self, *, use_em_root: bool = False, icp_machine_id: str | None = None) -> str:
@@ -120,7 +125,7 @@ class TenableClient:
         endpoint = self._endpoint_for(use_em_root=use_em_root, icp_machine_id=icp_machine_id)
 
         try:
-            async with httpx.AsyncClient(verify=self._tls_verify, timeout=self._timeout) as client:
+            async with httpx.AsyncClient(verify=self._verify, timeout=self._timeout) as client:
                 resp = await client.post(endpoint, headers=self._headers(), json=payload)
         except httpx.HTTPError as e:
             raise TenableError(f"Transport error talking to Tenable OT/EM: {e}") from e

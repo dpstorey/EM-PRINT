@@ -1,0 +1,10 @@
+services:
+  tenable-ot-print:
+    networks:
+      default:
+      ai-services:
+
+networks:
+  ai-services:
+    external: true
+    name: ai-services

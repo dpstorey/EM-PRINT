@@ -93,3 +93,30 @@ def get_output_dir() -> Path:
     p = Path(os.environ.get("MCP_OUTPUT_DIR", "./output"))
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+def get_ca_bundle_path(data_dir: Path) -> Path | None:
+    """Path to a custom CA bundle for verifying the Tenable OT/EM TLS
+    certificate -- for deployments (like an internal/self-hosted EM)
+    where that cert is signed by a private CA not in the public CA
+    bundle httpx ships with.
+
+    Checked in order:
+      1. MCP_TENABLE_CA_BUNDLE env var, if set (any path).
+      2. <data_dir>/tenable-ca.pem, if present.
+      3. None -- falls back to the tls_verify checkbox from setup
+         (True = verify against the public CA bundle, False = don't verify).
+
+    Drop your EM/ICP's root (or full chain) CA cert in PEM format at
+    either location and restart -- no code change needed.
+    """
+    env_path = os.environ.get("MCP_TENABLE_CA_BUNDLE")
+    if env_path:
+        candidate = Path(env_path)
+        if not candidate.is_file():
+            raise FileNotFoundError(f"MCP_TENABLE_CA_BUNDLE={env_path!r} does not exist")
+        return candidate
+    default_path = data_dir / "tenable-ca.pem"
+    if default_path.is_file():
+        return default_path
+    return None

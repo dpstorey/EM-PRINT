@@ -16,7 +16,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .audit import AuditLog
-from .config import Config, get_output_dir
+from .config import Config, get_ca_bundle_path, get_output_dir
 from .modules import discover_manifests, load_module
 from .tenable_client import TenableClient
 
@@ -54,9 +54,15 @@ def _list_themes() -> list[str]:
     return sorted(p.name for p in _THEMES_DIR.iterdir() if p.is_dir())
 
 
-def build_mcp_app(cfg: Config, audit: AuditLog) -> Any:
+def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
     """Construct the FastMCP server and return its Streamable HTTP app."""
-    client = TenableClient(cfg.tenable_url, cfg.tenable_api_key, tls_verify=cfg.tls_verify)
+    ca_bundle = get_ca_bundle_path(data_dir)
+    client = TenableClient(
+        cfg.tenable_url,
+        cfg.tenable_api_key,
+        tls_verify=cfg.tls_verify,
+        ca_bundle=str(ca_bundle) if ca_bundle else None,
+    )
     output_dir = get_output_dir()
 
     mcp = FastMCP(

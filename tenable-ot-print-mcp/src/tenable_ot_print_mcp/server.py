@@ -23,7 +23,7 @@ from starlette.routing import Route
 from . import __version__
 from .audit import AuditLog
 from .auth import AuthError, authenticate
-from .config import Config, ConfigStore, generate_bearer_token
+from .config import Config, ConfigStore, generate_bearer_token, get_ca_bundle_path
 from .tenable_client import TenableClient
 
 
@@ -38,7 +38,7 @@ class AppState:
             self._config = self.store.load()
             from .mcp_app import build_mcp_app
 
-            self.mcp_app = build_mcp_app(self._config, self.audit)
+            self.mcp_app = build_mcp_app(self._config, self.audit, self.data_dir)
 
     def get_config(self) -> Config | None:
         return self._config
@@ -101,11 +101,25 @@ async def setup_post(request: Request) -> Response:
     if not tenable_url.lower().startswith(("http://", "https://")):
         return _render_error("URL must start with http:// or https://.")
 
-    client = TenableClient(tenable_url, tenable_api_key, tls_verify=tls_verify)
+    ca_bundle = get_ca_bundle_path(state.data_dir)
+    client = TenableClient(
+        tenable_url,
+        tenable_api_key,
+        tls_verify=tls_verify,
+        ca_bundle=str(ca_bundle) if ca_bundle else None,
+    )
     ok = await client.healthcheck()
     if not ok:
+        hint = (
+            f" A custom CA bundle is configured at {ca_bundle}; if this deployment uses an "
+            "internal/private CA, confirm that file has the right cert."
+            if ca_bundle
+            else " If your EM/ICP's TLS cert is signed by an internal/private CA, drop it "
+            "(PEM format) at MCP_TENABLE_CA_BUNDLE, or ./data/tenable-ca.pem, and retry."
+        )
         return _render_error(
-            "Could not reach Tenable OT/EM or authenticate. Check URL, API key, and TLS settings.",
+            "Could not reach Tenable OT/EM or authenticate. Check URL, API key, and TLS settings."
+            + hint,
             status=502,
         )
 
