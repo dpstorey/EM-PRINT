@@ -78,6 +78,22 @@ _CRITICALITY_ENUM = {
 }
 _CRITICALITY_ORDINAL = ["none", "low", "medium", "high"]
 
+# Display labels for the report table -- Tenable's ..Criticality enum
+# ("LowCriticality" etc.), matched case-insensitively, mapped to the
+# same Low/Medium/High/None wording used in Tenable's own interface
+# (rather than the lowercased-enum-string "lowcriticality" this used
+# to render as).
+_CRITICALITY_DISPLAY = {
+    "nonecriticality": "None",
+    "lowcriticality": "Low",
+    "mediumcriticality": "Medium",
+    "highcriticality": "High",
+}
+
+
+def _display_criticality(raw: str | None) -> str:
+    return _CRITICALITY_DISPLAY.get((raw or "").strip().lower(), "None")
+
 
 def _build_filter(params: dict[str, Any]) -> dict | None:
     """Translate this module's natural-language params into Tenable's
@@ -203,16 +219,17 @@ class AssetInventoryModule(_base.ReportModule):
         for node in data.get("nodes") or []:
             ips = (node.get("ips") or {}).get("nodes") or []
             risk = node.get("risk") or {}
+            total_risk = risk.get("totalRisk")
             assets.append(
                 {
                     "name": node.get("name") or "(unnamed)",
                     "vendor": node.get("vendor") or "",
                     "model": node.get("model") or "",
                     "firmware_version": node.get("firmwareVersion") or "",
-                    "criticality": (node.get("criticality") or "none").lower(),
+                    "criticality": _display_criticality(node.get("criticality")),
                     "ip": ips[0] if ips else "",
                     "last_seen": node.get("lastSeen") or "",
-                    "total_risk": risk.get("totalRisk"),
+                    "total_risk": f"{total_risk:.1f}" if isinstance(total_risk, (int, float)) else "",
                     "unresolved_events": risk.get("unresolvedEvents"),
                 }
             )
