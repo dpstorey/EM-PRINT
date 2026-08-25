@@ -4,10 +4,24 @@ GraphQL field selection mirrors EM-MCP's tools/assets.py `_ASSET_BASE`
 fragment (trimmed to what a print report needs) so this module stays
 consistent with the real, working schema rather than inventing field
 names. See ../../../../EM-MCP/tenable-ot-mcp/src/tenable_ot_mcp/tools/assets.py.
+
+The `criticality_at_least` and `subnet` filters are pushed down into
+the GraphQL `filter: AssetExpressionsParams` argument rather than
+applied client-side after fetch, mirroring EM-MCP's
+`tools/_enums.py` (`expr`/`expr_and`) + `tools/assets.py`
+(`_build_asset_filter`) exactly -- same field names ("criticality",
+"ips"), same ops ("In" for criticality-at-least, "Between" for
+subnet), same enum strings (e.g. "MediumCriticality"). This matters
+at scale: Phase 0 has no cursor-pagination loop yet (see
+design-notes.md Sec 4), so a client-side filter would only ever see
+whatever fit in the single fetched page -- pushing the filter into
+the query itself means the whole EM/ICP inventory gets filtered
+before the page-size cap applies.
 """
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,8 +29,8 @@ from ...tenable_client import TenableClient
 from .. import _base
 
 _QUERY_ASSETS = """
-query Q($pageSize: Int!) {
-  assets(first: $pageSize) {
+query Q($pageSize: Int!, $filter: AssetExpressionsParams) {
+  assets(first: $pageSize, filter: $filter) {
     totalCount
     nodes {
       id
@@ -33,7 +47,49 @@ query Q($pageSize: Int!) {
 }
 """
 
-_CRITICALITY_ORDER = {"none": 0, "low": 1, "medium": 2, "high": 3}
+# Tenable's AssetExpressionsParams op vocabulary (see EM-MCP's
+# tools/_enums.py) -- only the two ops this module needs.
+_EXPR_IN = "In"
+_EXPR_BETWEEN = "Between"
+_EXPR_AND = "And"
+
+_CRITICALITY_ENUM = {
+    "none": "NoneCriticality",
+    "low": "LowCriticality",
+    "medium": "MediumCriticality",
+    "high": "HighCriticality",
+}
+_CRITICALITY_ORDINAL = ["none", "low", "medium", "high"]
+
+
+def _build_filter(params: dict[str, Any]) -> dict | None:
+    """Translate this module's natural-language params into Tenable's
+    `AssetExpressionsParams` expression tree. Returns None when no
+    filter is needed (an unfiltered `assets(first: N)` fetch)."""
+    parts: list[dict] = []
+
+    criticality_at_least = params.get("criticality_at_least")
+    if criticality_at_least:
+        idx = _CRITICALITY_ORDINAL.index(criticality_at_least)
+        values = [_CRITICALITY_ENUM[level] for level in _CRITICALITY_ORDINAL[idx:]]
+        parts.append({"field": "criticality", "op": _EXPR_IN, "values": values})
+
+    subnet = params.get("subnet")
+    if subnet:
+        network = ipaddress.ip_network(subnet, strict=False)
+        parts.append(
+            {
+                "field": "ips",
+                "op": _EXPR_BETWEEN,
+                "values": [str(network.network_address), str(network.broadcast_address)],
+            }
+        )
+
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return {"op": _EXPR_AND, "expressions": parts}
 
 
 class AssetInventoryModule(_base.ReportModule):
@@ -48,19 +104,34 @@ class AssetInventoryModule(_base.ReportModule):
         limit = max(1, min(limit, 500))
 
         criticality_at_least = params.get("criticality_at_least")
-        if criticality_at_least is not None and criticality_at_least not in _CRITICALITY_ORDER:
+        if criticality_at_least is not None and criticality_at_least not in _CRITICALITY_ORDINAL:
             raise ValueError(
-                f"criticality_at_least must be one of {sorted(_CRITICALITY_ORDER)}, "
+                f"criticality_at_least must be one of {_CRITICALITY_ORDINAL}, "
                 f"got {criticality_at_least!r}"
             )
-        return {"limit": limit, "criticality_at_least": criticality_at_least}
+
+        subnet = params.get("subnet")
+        if subnet is not None:
+            try:
+                ipaddress.ip_network(subnet, strict=False)
+            except ValueError as e:
+                raise ValueError(f"invalid subnet CIDR {subnet!r}: {e}") from e
+
+        return {"limit": limit, "criticality_at_least": criticality_at_least, "subnet": subnet}
 
     async def fetch_data(self, client: TenableClient, params: dict[str, Any]) -> dict[str, Any]:
         # Phase 0: single connection, no cursor pagination yet. A `limit`
-        # beyond one page's worth of assets will need the cursor-following
-        # loop flagged in design-notes.md §4.5 before this module can be
-        # trusted at 10k-asset scale.
-        data = await client.query(_QUERY_ASSETS, variables={"pageSize": params["limit"]})
+        # beyond one page's worth of matching assets will need the
+        # cursor-following loop flagged in design-notes.md Sec 4 before
+        # this module can be trusted at 10k-asset scale. The filter
+        # (criticality/subnet) is applied server-side via GraphQL, so at
+        # least it's the *matching* assets that get capped by `limit`,
+        # not an arbitrary first page of the whole inventory.
+        filt = _build_filter(params)
+        data = await client.query(
+            _QUERY_ASSETS,
+            variables={"pageSize": params["limit"], "filter": filt},
+        )
         connection = data.get("assets") or {}
         return {
             "total_count": connection.get("totalCount") or 0,
@@ -68,12 +139,8 @@ class AssetInventoryModule(_base.ReportModule):
         }
 
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
-        min_level = _CRITICALITY_ORDER.get(params.get("criticality_at_least") or "none", 0)
         assets = []
         for node in data.get("nodes") or []:
-            criticality = (node.get("criticality") or "none").lower()
-            if _CRITICALITY_ORDER.get(criticality, 0) < min_level:
-                continue
             ips = (node.get("ips") or {}).get("nodes") or []
             risk = node.get("risk") or {}
             assets.append(
@@ -82,7 +149,7 @@ class AssetInventoryModule(_base.ReportModule):
                     "vendor": node.get("vendor") or "",
                     "model": node.get("model") or "",
                     "firmware_version": node.get("firmwareVersion") or "",
-                    "criticality": criticality,
+                    "criticality": (node.get("criticality") or "none").lower(),
                     "ip": ips[0] if ips else "",
                     "last_seen": node.get("lastSeen") or "",
                     "total_risk": risk.get("totalRisk"),

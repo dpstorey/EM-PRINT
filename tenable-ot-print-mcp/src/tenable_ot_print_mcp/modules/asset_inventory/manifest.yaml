@@ -10,10 +10,15 @@ params:
     type: integer
     required: false
     default: 100
-    description: Maximum number of assets to include (clamped to 500).
+    description: Maximum number of matching assets to include (clamped to 500).
   - name: criticality_at_least
     type: string
     required: false
     default: null
-    description: "Optional minimum criticality filter: none|low|medium|high."
+    description: "Optional minimum criticality filter: none|low|medium|high. Applied server-side."
+  - name: subnet
+    type: string
+    required: false
+    default: null
+    description: "Optional IPv4/IPv6 CIDR (e.g. 10.253.10.128/25). Matches assets whose IP falls within this subnet. Applied server-side, mirrors EM-MCP's native subnet filter."
 output_formats: [markdown, html]
