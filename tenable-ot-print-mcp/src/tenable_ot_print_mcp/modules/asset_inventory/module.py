@@ -227,7 +227,20 @@ class AssetInventoryModule(_base.ReportModule):
                     "model": node.get("model") or "",
                     "firmware_version": node.get("firmwareVersion") or "",
                     "criticality": _display_criticality(node.get("criticality")),
-                    "ip": ips[0] if ips else "",
+                    # An asset can legitimately have several NICs/IPs; showing
+                    # only ips[0] silently dropped the rest. Space-joined so
+                    # the cell wraps on word boundaries in the HTML output
+                    # (the theme's CSS never sets white-space: nowrap on
+                    # table cells -- see _HTML_SHELL in render.py) rather than
+                    # overflowing the column. A plain space needs no Markdown
+                    # escaping, unlike a literal "|" would (render.py produces
+                    # the HTML by running this Markdown through
+                    # python-markdown's `tables` extension, so an unescaped
+                    # "|" in a cell would be misread as a column separator).
+                    # GraphQL fetch is still capped at the first 5 IPs (see
+                    # _QUERY_ASSETS* above) -- fine for Phase 0, but an asset
+                    # with more than 5 interfaces would still be truncated.
+                    "ip": " ".join(ips) if ips else "",
                     "last_seen": node.get("lastSeen") or "",
                     "total_risk": f"{total_risk:.1f}" if isinstance(total_risk, (int, float)) else "",
                     "unresolved_events": risk.get("unresolvedEvents"),

@@ -63,3 +63,32 @@ class AuditLog:
         line = json.dumps(row, default=str, sort_keys=True) + "\n"
         with self._lock, self.path.open("a", encoding="utf-8") as f:
             f.write(line)
+
+    def recent(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return up to `limit` most recent audit rows, newest first.
+
+        Best-effort: a missing file returns an empty list, and any
+        line that fails to parse (e.g. a read caught mid-append) is
+        skipped rather than raised. This is a read path bolted onto
+        an append-only log for `list_recent_report_jobs` -- Phase 0
+        has no separate job-status store yet (see design-notes.md),
+        so "is my job done" is answered by "does the audit log have a
+        completed/error row for it" rather than a true running/queued
+        state.
+        """
+        if not self.path.is_file():
+            return []
+        with self._lock, self.path.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+        rows: list[dict[str, Any]] = []
+        for raw_line in reversed(lines):
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                rows.append(json.loads(raw_line))
+            except json.JSONDecodeError:
+                continue
+            if len(rows) >= limit:
+                break
+        return rows

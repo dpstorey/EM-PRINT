@@ -43,6 +43,14 @@ Operating principles:
    data-heavy module can take a while and there is no cancel/poll yet
    — prefer modest limits until the async job queue (a later phase)
    lands.
+
+4. If a job's outcome seems to be missing -- e.g. the connection
+   dropped, or a client-side error appeared, before you saw a result
+   -- use `list_recent_report_jobs` to check whether it actually
+   completed on the server before assuming it failed and resubmitting.
+   Note this reports *past* jobs (ok/error, from the audit log); since
+   Phase 0 runs synchronously there is no separate "still running"
+   state to report for a job in progress right now.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"
@@ -148,5 +156,19 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
             "returned_count": context.get("returned_count"),
             "total_count": context.get("total_count"),
         }
+
+    @mcp.tool(
+        title="List recent report jobs",
+        description=(
+            "Lists the most recent report jobs from the audit log, newest first: "
+            "outcome (ok/error), module, params, and output file paths. Answers "
+            "'did my last job actually finish' -- useful if a connection dropped or "
+            "the client-side result looked wrong -- rather than polling a job that's "
+            "still running: Phase 0's submit_report_job is synchronous (it only "
+            "returns once done), so there is no in-progress state to report yet."
+        ),
+    )
+    async def list_recent_report_jobs(limit: int = 10) -> dict[str, Any]:
+        return {"jobs": audit.recent(limit=limit)}
 
     return mcp.streamable_http_app()
