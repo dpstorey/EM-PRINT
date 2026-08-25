@@ -128,10 +128,17 @@ class AssetInventoryModule(_base.ReportModule):
         # least it's the *matching* assets that get capped by `limit`,
         # not an arbitrary first page of the whole inventory.
         filt = _build_filter(params)
-        data = await client.query(
-            _QUERY_ASSETS,
-            variables={"pageSize": params["limit"], "filter": filt},
-        )
+        variables: dict[str, Any] = {"pageSize": params["limit"]}
+        if filt is not None:
+            # Mirror EM-MCP's tools/assets.py exactly: only include the
+            # `filter` key when there's an actual filter. Tenable's
+            # GraphQL backend handles an *omitted* filter argument fine,
+            # but an explicit `filter: null` apparently routes into a
+            # different (broken) internal path -- this was seen live as
+            # a GraphQL-level error wrapping an upstream "404 page not
+            # found", on every query once this always sent `filter: null`.
+            variables["filter"] = filt
+        data = await client.query(_QUERY_ASSETS, variables=variables)
         connection = data.get("assets") or {}
         return {
             "total_count": connection.get("totalCount") or 0,
