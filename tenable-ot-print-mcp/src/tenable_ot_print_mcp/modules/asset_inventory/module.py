@@ -134,7 +134,41 @@ class AssetInventoryModule(_base.ReportModule):
             except ValueError as e:
                 raise ValueError(f"invalid subnet CIDR {subnet!r}: {e}") from e
 
-        return {"limit": limit, "criticality_at_least": criticality_at_least, "subnet": subnet}
+        site_uuid = params.get("site_uuid")
+        site_name = params.get("site_name")
+
+        return {
+            "limit": limit,
+            "criticality_at_least": criticality_at_least,
+            "subnet": subnet,
+            "site_uuid": site_uuid,
+            "site_name": site_name,
+        }
+
+    async def _resolve_icp_machine_id(self, client: TenableClient, params: dict[str, Any]) -> str:
+        """Assets live on paired ICPs, not the EM root -- resolve which
+        ICP to query rather than ever hitting `<base>/graphql` for
+        asset data (that was confirmed live to fail with a
+        GraphQL-wrapped 404; see design-notes.md Sec 0.6)."""
+        site_uuid = params.get("site_uuid")
+        site_name = params.get("site_name")
+        if site_uuid or site_name:
+            return await client.resolve_site_machine_id(site_uuid=site_uuid, site_name=site_name)
+
+        icps = await client.list_paired_icps()
+        if not icps:
+            raise ValueError(
+                "No paired ICPs found on this Enterprise Manager. Asset data lives on "
+                "paired ICPs, not the EM root, so at least one ICP must be paired before "
+                "this report can run."
+            )
+        if len(icps) > 1:
+            names = ", ".join(sorted(i["name"] for i in icps))
+            raise ValueError(
+                f"Multiple paired ICPs found ({names}); pass `site_uuid` or `site_name` "
+                "to pick which one this report should query."
+            )
+        return icps[0]["machine_id"]
 
     async def fetch_data(self, client: TenableClient, params: dict[str, Any]) -> dict[str, Any]:
         # Phase 0: single connection, no cursor pagination yet. A `limit`
@@ -144,16 +178,19 @@ class AssetInventoryModule(_base.ReportModule):
         # (criticality/subnet) is applied server-side via GraphQL, so at
         # least it's the *matching* assets that get capped by `limit`,
         # not an arbitrary first page of the whole inventory.
+        icp_machine_id = await self._resolve_icp_machine_id(client, params)
         filt = _build_filter(params)
         if filt is not None:
             data = await client.query(
                 _QUERY_ASSETS_FILTERED,
                 variables={"pageSize": params["limit"], "filter": filt},
+                icp_machine_id=icp_machine_id,
             )
         else:
             data = await client.query(
                 _QUERY_ASSETS_PLAIN,
                 variables={"pageSize": params["limit"]},
+                icp_machine_id=icp_machine_id,
             )
         connection = data.get("assets") or {}
         return {

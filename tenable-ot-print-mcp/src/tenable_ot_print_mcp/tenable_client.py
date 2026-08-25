@@ -204,6 +204,30 @@ class TenableClient:
                     mapping[site_name.strip().lower()] = machine_id.strip("/")
         self._site_name_to_machine_id = mapping
 
+    async def list_paired_icps(self) -> list[dict[str, str]]:
+        """List EM-paired ICPs as [{"name": ..., "machine_id": ...}, ...].
+
+        Assets, vulns, events, etc. live on paired ICPs, not the EM
+        root -- an unfiltered `assets` query against `<base>/graphql`
+        (no icp_machine_id) is not a lighter/simpler version of a
+        per-ICP query, it's a query against the wrong endpoint
+        entirely and was seen live to fail with a GraphQL-wrapped
+        404. Callers that need asset-level data must resolve an ICP
+        machine id first (see `resolve_site_machine_id`) and pass it
+        as `icp_machine_id` to `query()`.
+        """
+        data = await self.query_em(_QUERY_EM_PAIRED_ICPS, variables={"pageSize": 500})
+        conn = (data or {}).get("emPairedIcps") or {}
+        result: list[dict[str, str]] = []
+        for edge in conn.get("edges") or []:
+            node = (edge or {}).get("node") or {}
+            site = node.get("site") or {}
+            machine_id = site.get("machineId")
+            name = site.get("name")
+            if isinstance(machine_id, str) and isinstance(name, str) and machine_id.strip() and name.strip():
+                result.append({"name": name.strip(), "machine_id": machine_id.strip("/")})
+        return result
+
     async def resolve_site_machine_id(self, *, site_uuid: str | None, site_name: str | None) -> str:
         if site_uuid:
             return validate_machine_id(site_uuid.strip("/"), field="site_uuid")

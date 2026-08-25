@@ -1,10 +1,10 @@
 name: asset_inventory
 title: Asset Inventory
 description: >
-  Lists OT assets from the configured Tenable OT / Enterprise Manager
-  connection with vendor, model, firmware, criticality, and risk
-  summary fields. Sample module proving the Phase 0 pipeline
-  (GraphQL fetch -> Markdown -> HTML) end-to-end.
+  Lists OT assets from a paired ICP behind the configured Tenable OT /
+  Enterprise Manager connection, with vendor, model, firmware,
+  criticality, and risk summary fields. Sample module proving the
+  Phase 0 pipeline (GraphQL fetch -> Markdown -> HTML) end-to-end.
 params:
   - name: limit
     type: integer
@@ -21,4 +21,14 @@ params:
     required: false
     default: null
     description: "Optional IPv4/IPv6 CIDR (e.g. 10.253.10.128/25). Matches assets whose IP falls within this subnet. Applied server-side, mirrors EM-MCP's native subnet filter."
+  - name: site_uuid
+    type: string
+    required: false
+    default: null
+    description: "Target ICP's machine id (UUID). If omitted and exactly one ICP is paired to this EM, that ICP is used automatically; if more than one is paired, this or site_name becomes required."
+  - name: site_name
+    type: string
+    required: false
+    default: null
+    description: "Target ICP by its paired name instead of site_uuid. Same auto-resolution rule applies."
 output_formats: [markdown, html]
