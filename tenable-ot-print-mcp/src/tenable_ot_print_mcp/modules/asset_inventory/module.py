@@ -12,11 +12,11 @@ applied client-side after fetch, mirroring EM-MCP's
 (`_build_asset_filter`) exactly -- same field names ("criticality",
 "ips"), same ops ("In" for criticality-at-least, "Between" for
 subnet), same enum strings (e.g. "MediumCriticality"). This matters
-at scale: Phase 0 has no cursor-pagination loop yet (see
-design-notes.md Sec 4), so a client-side filter would only ever see
-whatever fit in the single fetched page -- pushing the filter into
-the query itself means the whole EM/ICP inventory gets filtered
-before the page-size cap applies.
+at scale: fetch_data() below follows `pageInfo.hasNextPage` +
+`endCursor` to collect up to `limit` matching assets across as many
+requests as needed, so pushing the filter into the query itself means
+the whole EM/ICP inventory gets filtered before that cap applies --
+not just whatever happened to fit in one page.
 """
 
 from __future__ import annotations
@@ -28,18 +28,23 @@ from typing import Any
 from ...tenable_client import TenableClient
 from .. import _base
 
-# Two variants of the same field selection, differing only in whether
-# the operation declares a `$filter` variable at all. Kept genuinely
-# separate (not "one query, sometimes-omitted variable") because we
-# saw live evidence that merely *declaring* $filter -- even when the
-# call supplies no value for it -- is enough to change Tenable's
-# server-side routing for this query on this deployment (see
-# design-notes.md Sec 0.5): the unfiltered case regressed to a 404
-# GraphQL error the moment $filter appeared in the query text, even
-# after variables stopped sending an explicit null. Unfiltered calls
-# get the exact query text that was confirmed working against real
-# data; filtered calls get the EM-MCP-equivalent query with $filter.
-_ASSET_FIELDS = """
+# Matches EM-MCP's real, production-proven `_QUERY_ASSETS` shape
+# (tools/assets.py) exactly: $filter and $search both declared, values
+# omitted from `variables` (not sent as null) when not supplied. An
+# earlier revision of this module split this into two separate query
+# strings after live 404s that looked like they were caused by merely
+# declaring $filter -- that theory didn't survive further testing
+# (design-notes.md Sec 0.4/0.6): the real cause was querying EM root
+# instead of a paired ICP, and once that was fixed, there was no
+# further evidence the declared-but-unused $filter mattered at all.
+# Reunified back to one query to match EM-MCP's real, working shape
+# rather than carrying forward an unnecessary workaround.
+_QUERY_ASSETS = """
+query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $search: String) {
+  assets(first: $pageSize, after: $after, filter: $filter, search: $search) {
+    totalCount
+    pageInfo { hasNextPage endCursor }
+    nodes {
       id
       name
       vendor
@@ -49,20 +54,10 @@ _ASSET_FIELDS = """
       lastSeen
       ips(first: 5) { nodes }
       risk { totalRisk pluginCount unresolvedEvents }
+    }
+  }
+}
 """
-
-_QUERY_ASSETS_PLAIN = (
-    "query Q($pageSize: Int!) { assets(first: $pageSize) { totalCount nodes { "
-    + _ASSET_FIELDS
-    + " } } }"
-)
-
-_QUERY_ASSETS_FILTERED = (
-    "query Q($pageSize: Int!, $filter: AssetExpressionsParams) { "
-    "assets(first: $pageSize, filter: $filter) { totalCount nodes { "
-    + _ASSET_FIELDS
-    + " } } }"
-)
 
 # Tenable's AssetExpressionsParams op vocabulary (see EM-MCP's
 # tools/_enums.py) -- only the two ops this module needs.
@@ -128,7 +123,25 @@ def _build_filter(params: dict[str, Any]) -> dict | None:
 class AssetInventoryModule(_base.ReportModule):
     template_name = "template.md.j2"
 
+    _KNOWN_PARAMS = frozenset(
+        {"limit", "criticality_at_least", "subnet", "site_uuid", "site_name", "search"}
+    )
+
     def validate_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        unknown = set(params) - self._KNOWN_PARAMS
+        if unknown:
+            # Fail loudly rather than silently ignore a param name the
+            # caller (often an LLM guessing) invented. A silently-dropped
+            # filter still returns a "successful" report -- just not the
+            # one that was asked for, which is worse than an error. Seen
+            # live: a `search` param was invented before this module
+            # supported it, silently ignored, and returned an unfiltered
+            # first-`limit` page while claiming to match a location.
+            raise ValueError(
+                f"Unknown param(s) for asset_inventory: {sorted(unknown)}. "
+                f"Supported params: {sorted(self._KNOWN_PARAMS)}."
+            )
+
         limit = params.get("limit", 100)
         try:
             limit = int(limit)
@@ -152,6 +165,7 @@ class AssetInventoryModule(_base.ReportModule):
 
         site_uuid = params.get("site_uuid")
         site_name = params.get("site_name")
+        search = params.get("search")
 
         return {
             "limit": limit,
@@ -159,6 +173,7 @@ class AssetInventoryModule(_base.ReportModule):
             "subnet": subnet,
             "site_uuid": site_uuid,
             "site_name": site_name,
+            "search": search,
         }
 
     async def _resolve_icp_machine_id(self, client: TenableClient, params: dict[str, Any]) -> str:
@@ -187,31 +202,56 @@ class AssetInventoryModule(_base.ReportModule):
         return icps[0]["machine_id"]
 
     async def fetch_data(self, client: TenableClient, params: dict[str, Any]) -> dict[str, Any]:
-        # Phase 0: single connection, no cursor pagination yet. A `limit`
-        # beyond one page's worth of matching assets will need the
-        # cursor-following loop flagged in design-notes.md Sec 4 before
-        # this module can be trusted at 10k-asset scale. The filter
-        # (criticality/subnet) is applied server-side via GraphQL, so at
-        # least it's the *matching* assets that get capped by `limit`,
-        # not an arbitrary first page of the whole inventory.
+        # Cursor-following pagination: a single GraphQL request's
+        # `first: N` is not guaranteed to return N nodes in one round
+        # trip (seen live: a job with the default limit=100 stopped
+        # after exactly 100 nodes even though 3,461 assets matched), so
+        # this loops on `pageInfo.hasNextPage` + `endCursor` -- the same
+        # pattern EM-MCP's real tools/assets.py exposes to its LLM
+        # caller ("keep paging while has_more is true") -- until either
+        # `limit` matching assets have been collected or the server
+        # reports no more pages. `limit` is already clamped to <= 500 in
+        # validate_params, so this loop is bounded; the filter
+        # (criticality/subnet/search) is applied server-side via
+        # GraphQL, so it's the *matching* assets that get paged through
+        # up to that cap, not an arbitrary slice of the whole inventory.
         icp_machine_id = await self._resolve_icp_machine_id(client, params)
         filt = _build_filter(params)
-        if filt is not None:
+        search = params.get("search")
+        limit = params["limit"]
+
+        nodes: list[dict[str, Any]] = []
+        total_count = 0
+        cursor: str | None = None
+
+        while len(nodes) < limit:
+            variables: dict[str, Any] = {"pageSize": limit - len(nodes)}
+            if cursor is not None:
+                variables["after"] = cursor
+            if filt is not None:
+                variables["filter"] = filt
+            if search:
+                variables["search"] = search
+
             data = await client.query(
-                _QUERY_ASSETS_FILTERED,
-                variables={"pageSize": params["limit"], "filter": filt},
-                icp_machine_id=icp_machine_id,
+                _QUERY_ASSETS, variables=variables, icp_machine_id=icp_machine_id
             )
-        else:
-            data = await client.query(
-                _QUERY_ASSETS_PLAIN,
-                variables={"pageSize": params["limit"]},
-                icp_machine_id=icp_machine_id,
-            )
-        connection = data.get("assets") or {}
+            connection = data.get("assets") or {}
+            total_count = connection.get("totalCount") or 0
+            page_nodes = connection.get("nodes") or []
+            nodes.extend(page_nodes)
+
+            page_info = connection.get("pageInfo") or {}
+            cursor = page_info.get("endCursor")
+            # Defensive stop: no next page, or a page claiming more but
+            # returning neither nodes nor a cursor to follow -- avoid an
+            # infinite loop on a malformed response.
+            if not page_info.get("hasNextPage") or not page_nodes or not cursor:
+                break
+
         return {
-            "total_count": connection.get("totalCount") or 0,
-            "nodes": connection.get("nodes") or [],
+            "total_count": total_count,
+            "nodes": nodes[:limit],
         }
 
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:

@@ -21,6 +21,11 @@ params:
     required: false
     default: null
     description: "Optional IPv4/IPv6 CIDR (e.g. 10.253.10.128/25). Matches assets whose IP falls within this subnet. Applied server-side, mirrors EM-MCP's native subnet filter."
+  - name: search
+    type: string
+    required: false
+    default: null
+    description: "Optional free-text search, passed through to Tenable's native GraphQL `search` argument on the assets field (e.g. can match a location/zone tag like 'PAINT SHOP'). Applied server-side, same mechanism EM-MCP uses."
   - name: site_uuid
     type: string
     required: false
