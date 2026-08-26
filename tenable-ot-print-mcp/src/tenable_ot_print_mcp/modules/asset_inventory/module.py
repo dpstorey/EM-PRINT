@@ -48,24 +48,30 @@ from .. import _base
 # Reunified back to one query to match EM-MCP's real, working shape
 # rather than carrying forward an unnecessary workaround.
 #
-# Field selection (§0.10) is the union of EM-MCP's real, production
-# `_ASSET_BASE` fragment (id/name/type/superType/category/vendor/model/
-# firmwareVersion/os/family/description/location/purdueLevel/
-# criticality/hidden/runStatus/extendedRunStatus/firstSeen/lastSeen/
-# lastUpdate/lifecycleStatus/ips/macs/segments/risk/customField1-10 --
-# all confirmed working in EM-MCP's daily production use) plus a few
-# additional fields pyTenable's OT GraphQL asset schema documents
-# (tenable/ot/graphql/schema/assets.py) but EM-MCP itself doesn't
-# select: `serial`, `slot`, `backplane { name size }`,
-# `osDetails { architecture version }`, `runStatusTime`,
-# `attackVector`. Those last few are schema-documented but NOT yet
-# proven against a live query the way the EM-MCP-matched fields are --
-# if a live report ever errors here, GraphQL failures are all-or-
-# nothing per request (one bad field name breaks the whole fetch, not
-# just that column), so that's the first place to look. `ips`/`macs`
-# raised to `first: 50` (from the earlier `first: 5`) to match EM-MCP's
-# real fragment -- incidentally closes the "an asset with >5 NICs gets
-# truncated" gap flagged in design-notes.md §4.
+# Field selection (§0.10, corrected against Dom's real schema paste in
+# §0.11) starts from EM-MCP's real, production `_ASSET_BASE` fragment
+# (id/name/type/superType/category/vendor/model/firmwareVersion/os/
+# family/description/location/purdueLevel/criticality/hidden/
+# runStatus/extendedRunStatus/firstSeen/lastSeen/lastUpdate/
+# lifecycleStatus/ips/macs/segments/risk/customField1-10 -- confirmed
+# working in EM-MCP's daily production use) plus every additional
+# scalar/StringConnection field Dom's own GraphQL schema paste (§0.11)
+# confirms actually exists on the Asset type: `serial`, `slot`,
+# `backplane { name size }`, `osDetails { name architecture version }`,
+# `runStatusTime`, `attackVector`, `hardwareState`, `discontinuedDate`,
+# `replacementProduct`, `lastHit`, `lastSnapshot`, `subnets`, `tags`.
+# Deliberately NOT selected despite existing on the schema: `sources`
+# (a `LeanSourceConnection` whose node shape isn't confirmed -- adding
+# it blind risks breaking every report if the guessed sub-field name
+# is wrong, since GraphQL failures are all-or-nothing per request);
+# `directIps`/`directMacs`/`networkInterfaces`/`directNetworkInterfaces`/
+# `ipSegments`/`relationships`/`detailedSources` (richer/relationship
+# data, not a flat tabulatable asset attribute); `events*`/`plugins*`/
+# `revision*` (separate entities -- vulnerabilities and history, not
+# asset attributes); `details`/`layout` (opaque JSON/UI-layout blobs).
+# `ips`/`macs` raised to `first: 50` (from the earlier `first: 5`) to
+# match EM-MCP's real fragment -- incidentally closes the "an asset
+# with >5 NICs gets truncated" gap flagged in design-notes.md §4.
 _QUERY_ASSETS = """
 query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $search: String) {
   assets(first: $pageSize, after: $after, filter: $filter, search: $search) {
@@ -94,12 +100,19 @@ query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $searc
       lifecycleStatus
       firstSeen
       lastSeen
+      lastHit
+      lastSnapshot
       lastUpdate
       serial
       slot
       backplane { name size }
+      hardwareState
+      discontinuedDate
+      replacementProduct
       ips(first: 50) { nodes }
       macs(first: 50) { nodes }
+      subnets(first: 50) { nodes }
+      tags(first: 50) { nodes }
       segments(first: 50) { nodes { name } }
       attackVector
       risk { totalRisk pluginCount unresolvedEvents }
@@ -236,8 +249,15 @@ _COLUMN_REGISTRY: dict[str, tuple[str, Callable[[dict[str, Any]], Any]]] = {
     "slot": ("Slot", lambda n: n.get("slot")),
     "backplane_name": ("Backplane", lambda n: (n.get("backplane") or {}).get("name")),
     "backplane_size": ("Backplane Size", lambda n: (n.get("backplane") or {}).get("size")),
+    "hardware_state": ("Hardware State", lambda n: n.get("hardwareState")),
+    "discontinued_date": ("Discontinued At", lambda n: n.get("discontinuedDate")),
+    "replacement_product": ("Replacement Product", lambda n: n.get("replacementProduct")),
+    "last_hit": ("Last Hit", lambda n: n.get("lastHit")),
+    "last_snapshot": ("Last Snapshot", lambda n: n.get("lastSnapshot")),
     "ip": ("IPs", lambda n: _join_nodes(n.get("ips"))),
     "mac": ("MACs", lambda n: _join_nodes(n.get("macs"))),
+    "subnets": ("Subnets", lambda n: _join_nodes(n.get("subnets"))),
+    "tags": ("Tags", lambda n: _join_nodes(n.get("tags"))),
     "segments": ("Segments", lambda n: _join_segment_names(n.get("segments"))),
     "attack_vector": ("Attack Vector", lambda n: n.get("attackVector")),
     "total_risk": ("Risk", lambda n: _fmt_risk((n.get("risk") or {}).get("totalRisk"))),
