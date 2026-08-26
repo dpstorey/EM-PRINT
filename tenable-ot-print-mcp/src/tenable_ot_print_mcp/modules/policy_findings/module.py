@@ -18,17 +18,36 @@ Violations" pages are backed by this same `policyFindings` query,
 just under a different UI label -- real, queryable data, nothing
 cobbled together, just not named "compliance" at the schema level.
 
-Sort: same deliberate simplification as vulnerability_findings (see
-that module's docstring for the full reasoning) -- fixed, unconditional
-`lastHitTime DescNullLast`, matching EM-MCP's own proven usage,
-no caller-customizable `sort` param yet.
+Sort (added 2026-08-26, §0.20): a real schema introspection query Dom
+ran shows `PolicyFindingsSortParams.field` is typed exactly
+`PolicyFindingFilterField` -- the SAME enum that backs
+`PolicyFindingsExpressionsParams`'s filter `field` argument. That
+means the complete field list is schema-confirmed for both filtering
+and sorting at once, not something to infer from a capture (unlike
+vulnerability_findings, which only got this same treatment after an
+earlier, more conservative revision -- see that module's docstring).
+`_POLICY_SORT_FIELD` below maps every `_COLUMN_REGISTRY` column that
+has a matching enum value; a few real, displayed columns
+(`resolved_hits`, `active_policy_hits`, `policy_level`,
+`policy_enabled`, and the `event_type_*` sub-fields) are excluded
+because the enum has no matching entry for them specifically (the
+enum's `eventType` value refers to sorting by the whole nested object,
+not one of its sub-fields, so it isn't mapped to any of this module's
+`event_type_*` columns to avoid overclaiming what that would do).
+Omitting `sort` still returns rows most-recently-hit first
+(`lastHitTime DescNullLast`), unchanged from before.
 
-`status` here is intentionally NOT validated against a fixed enum:
-EM-MCP's own docstring for `query_policy_findings` only gives examples
-("Open"/"Resolved") without a closed list, and its implementation
-passes the value straight through unvalidated. Inventing a strict
-enum here would risk rejecting a real, valid status EM-MCP itself
-doesn't pretend to know the full set of.
+`status` (revised 2026-08-26, §0.20): the same introspection query
+also settles a real error inherited from EM-MCP's own uncertain
+docstring. `query_policy_findings`'s docstring only gave examples
+("Open"/"Resolved") without a closed list, so this module treated
+`status` as an arbitrary unvalidated string -- but the schema shows
+`PolicyFinding.status` is typed exactly `FindingStatus`, the same
+strict 3-value enum (`Active`/`Resolved`/`Resurfaced`) vulnerability_
+findings already validates against. "Open" was never a real value.
+`status` is now validated the same way vulnerability_findings does
+(one or more of active/resolved/resurfaced, `In` filter), replacing
+the old unvalidated-string behavior.
 """
 
 from __future__ import annotations
@@ -47,8 +66,28 @@ from .. import _base
 # disabled}`, and `srcAssets`/`dstAssets` (each `first: 5`, matching
 # EM-MCP's own cap -- not raised here since that cap's rationale
 # wasn't documented and this project doesn't guess past confirmed
-# usage). $sort is declared as a variable (matching EM-MCP's own query
-# shape) but always sent as the fixed `_DEFAULT_SORT` below.
+# usage). $sort is declared as a variable and now populated either
+# from a caller's resolved `sort` param or the fixed `_DEFAULT_SORT`
+# fallback.
+#
+# Dom's introspection query (2026-08-26) also confirmed a much richer
+# real field set on `PolicyFinding` not selected here yet: flat
+# (non-nested) `srcNames`/`srcIps`/`srcMacs`/`dstNames`/`dstIps`/
+# `dstMacs`, `assetsTypes`/`assetsCriticalities`/`assetsVendors`/
+# `assetsFamilies`/`assetsModels`/`assetsPurdueLevels`/
+# `assetsLocations`, `protocols`, `mitreTechniques`/`mitreTactics`,
+# `resolvedOn`/`resolvedUser`, `pluginSynopsis`/`pluginDescription`/
+# `pluginSolution`, `comment`, `trend`, and `lastHitId`. Not added as
+# columns now -- out of scope for this revision -- but confirmed real
+# and safe to add in a future pass without needing a fresh schema
+# check. Also confirmed: `policy` is a GraphQL *interface* (implemented
+# by 8 concrete policy types), not a plain object type -- the
+# `{id title level disabled}` selection below has been used
+# successfully in EM-MCP's own daily production queries, which is why
+# it was trusted originally, but this project hasn't independently
+# schema-verified those 4 fields are on the `Policy` interface itself
+# (vs. only certain implementations) -- worth a targeted check if this
+# selection ever errors live.
 _QUERY_POLICY_FINDINGS = """
 query Q($pageSize: Int!, $after: String, $filter: PolicyFindingsExpressionsParams, $search: String, $sort: [PolicyFindingsSortParams!]) {
   policyFindings(first: $pageSize, after: $after, filter: $filter, search: $search, sort: $sort) {
@@ -76,7 +115,8 @@ query Q($pageSize: Int!, $after: String, $filter: PolicyFindingsExpressionsParam
 }
 """
 
-# Fixed, unconditional sort -- see module docstring.
+# Fixed fallback sort, used when a caller omits `sort` entirely --
+# same value this module always sent before `sort` was customizable.
 _DEFAULT_SORT = [{"field": "lastHitTime", "direction": "DescNullLast"}]
 
 # Same canonical op vocabulary as the other two modules.
@@ -91,6 +131,18 @@ _EXPR_AND = "And"
 _POLICY_LEVEL_ORDINAL = ["none", "low", "medium", "high"]
 _POLICY_LEVEL_ENUM = {"none": "None", "low": "Low", "medium": "Medium", "high": "High"}
 _POLICY_LEVEL_DISPLAY = {"none": "None", "low": "Low", "medium": "Medium", "high": "High"}
+
+# Confirmed via Dom's introspection query (2026-08-26, §0.20):
+# `PolicyFinding.status` is typed `FindingStatus`, the exact same
+# strict 3-value enum vulnerability_findings validates against --
+# EM-MCP's own docstring examples ("Open"/"Resolved") were misleading;
+# "Open" is not a real value. Replaces the earlier unvalidated-raw-
+# string behavior.
+_FINDING_STATUS_ENUM = {
+    "active": "Active",
+    "resolved": "Resolved",
+    "resurfaced": "Resurfaced",
+}
 
 _PAGE_CHUNK = 500
 _SAFETY_MAX_FINDINGS = 50_000
@@ -183,6 +235,73 @@ def _resolve_columns(requested: list[str]) -> list[str]:
     return resolved
 
 
+# Sort (2026-08-26, §0.20): which `_COLUMN_REGISTRY` columns can be
+# passed to `sort`, mapped to the real GraphQL sort field name.
+# Schema-confirmed via `PolicyFindingsSortParams.field`'s type
+# (`PolicyFindingFilterField`) -- see module docstring. Excluded:
+# `resolved_hits`/`active_policy_hits` (real display fields, but no
+# matching enum value -- not filterable/sortable at all on this
+# surface), `policy_level`/`policy_enabled` (derived from the nested
+# `policy` interface, no matching flat enum value), and every
+# `event_type_*` column (the enum's `eventType` value sorts by the
+# whole nested object, not a specific sub-field, so mapping any single
+# `event_type_*` column to it would overclaim what it actually does).
+_POLICY_SORT_FIELD: dict[str, str] = {
+    "finding_id": "id",
+    "policy_title": "policyTitle",
+    "severity": "severity",
+    "status": "status",
+    "first_hit": "firstHitTime",
+    "last_hit": "lastHitTime",
+    "active_hits": "activeHits",
+    "plugin_id": "pluginId",
+    "plugin_name": "pluginName",
+    "category": "category",
+    # "policyId" is a real, separate enum value from the nested
+    # `policy.id` this column's getter reads -- almost certainly the
+    # same underlying value exposed as a flat filter/sort key. Mapped
+    # here on that basis; if that assumption is ever wrong, this is
+    # the one entry to double-check first.
+    "policy_id": "policyId",
+    # "srcAssets"/"dstAssets" are literally valid enum values despite
+    # being connections -- same precedent as asset_inventory's
+    # confirmed-sortable `macs`/`ips` connections.
+    "src_assets": "srcAssets",
+    "dst_assets": "dstAssets",
+}
+
+_POLICY_SORT_DIRECTIONS = {"asc": "AscNullLast", "desc": "DescNullLast"}
+
+
+def _resolve_sort(requested: list[str]) -> list[dict[str, str]]:
+    """Resolve a caller's raw `sort` request into Tenable's real
+    `[{"field": ..., "direction": "AscNullLast"|"DescNullLast"}]`
+    shape for the `policyFindings` query's `sort` argument. Same
+    selector language as the other modules (stable column key,
+    optionally prefixed `-` for descending) -- purely static, no
+    per-ICP resolution needed, so this runs entirely inside
+    validate_params()."""
+    name_to_key = {key.lower(): key for key in _COLUMN_REGISTRY}
+    resolved: list[dict[str, str]] = []
+    for raw in requested:
+        spec = raw.strip()
+        if spec.startswith("-"):
+            direction_word, spec = "desc", spec[1:].strip()
+        else:
+            direction_word = "asc"
+        key = name_to_key.get(spec.lower())
+        if key is None:
+            raise ValueError(f"Unknown column {spec!r}. Available columns: {sorted(_COLUMN_REGISTRY)}.")
+        sort_field = _POLICY_SORT_FIELD.get(key)
+        if sort_field is None:
+            raise ValueError(
+                f"Column {spec!r} can't be sorted on (no matching field on this GraphQL "
+                f"surface's sort/filter enum). Sortable columns: {sorted(_POLICY_SORT_FIELD)}."
+            )
+        resolved.append({"field": sort_field, "direction": _POLICY_SORT_DIRECTIONS[direction_word]})
+    return resolved
+
+
 def _build_filter(params: dict[str, Any]) -> dict | None:
     """Translate this module's natural-language params into Tenable's
     `PolicyFindingsExpressionsParams` expression tree. Returns None
@@ -197,8 +316,8 @@ def _build_filter(params: dict[str, Any]) -> dict | None:
 
     status = params.get("status")
     if status:
-        # Unvalidated raw string -- see module docstring.
-        parts.append({"field": "status", "op": _EXPR_EQUAL, "values": [status]})
+        values = [_FINDING_STATUS_ENUM[s] for s in status]
+        parts.append({"field": "status", "op": _EXPR_IN, "values": values})
 
     policy_id = params.get("policy_id")
     if policy_id:
@@ -234,6 +353,7 @@ class PolicyFindingsModule(_base.ReportModule):
             "site_name",
             "search",
             "columns",
+            "sort",
         }
     )
 
@@ -261,7 +381,28 @@ class PolicyFindingsModule(_base.ReportModule):
                 f"severity_at_least must be one of {_POLICY_LEVEL_ORDINAL}, got {severity_at_least!r}"
             )
 
-        status = params.get("status")  # unvalidated raw string, see module docstring
+        # `status` (revised 2026-08-26, §0.20): now validated against
+        # the real `FindingStatus` enum (active/resolved/resurfaced),
+        # same as vulnerability_findings -- see module docstring for
+        # why the old unvalidated-raw-string behavior was wrong.
+        # Accepts one value, several values, or a comma-separated
+        # string, same shape as vulnerability_findings' `status`.
+        status_param = params.get("status")
+        if status_param is None:
+            status = None
+        else:
+            if isinstance(status_param, str):
+                status_param = [s.strip() for s in status_param.split(",")]
+            if not isinstance(status_param, (list, tuple)):
+                raise ValueError(f"status must be a string or list of strings, got {status_param!r}")
+            status_list = [str(s).strip() for s in status_param if str(s).strip()]
+            invalid = [s for s in status_list if s not in _FINDING_STATUS_ENUM]
+            if invalid:
+                raise ValueError(
+                    f"status must be one or more of {sorted(_FINDING_STATUS_ENUM)}, got {invalid!r}"
+                )
+            status = status_list or None
+
         policy_id = params.get("policy_id")
         plugin_id = params.get("plugin_id")
         mitre_technique = params.get("mitre_technique")
@@ -285,6 +426,25 @@ class PolicyFindingsModule(_base.ReportModule):
                 )
             columns = _resolve_columns(raw_columns)
 
+        # `sort` (new 2026-08-26, §0.20): optional list of column
+        # selectors (or a comma-separated string), each optionally
+        # prefixed `-` for descending. Only the columns in
+        # `_POLICY_SORT_FIELD` are accepted -- see that dict's comment
+        # for what's excluded and why. Omitting `sort` keeps the fixed
+        # `lastHitTime DescNullLast` default.
+        sort_param = params.get("sort")
+        if sort_param is None:
+            sort = None
+        else:
+            if isinstance(sort_param, str):
+                sort_param = [c.strip() for c in sort_param.split(",")]
+            if not isinstance(sort_param, (list, tuple)):
+                raise ValueError(f"sort must be a list of column names, got {sort_param!r}")
+            raw_sort = [str(raw).strip() for raw in sort_param if str(raw).strip()]
+            if not raw_sort:
+                raise ValueError("sort must not be empty; omit it entirely for the default order.")
+            sort = _resolve_sort(raw_sort)
+
         return {
             "limit": limit,
             "severity_at_least": severity_at_least,
@@ -296,6 +456,7 @@ class PolicyFindingsModule(_base.ReportModule):
             "site_name": site_name,
             "search": search,
             "columns": columns,
+            "sort": sort,
         }
 
     async def _resolve_icp_machine_id(self, client: TenableClient, params: dict[str, Any]) -> str:
@@ -329,6 +490,7 @@ class PolicyFindingsModule(_base.ReportModule):
         filt = _build_filter(params)
         search = params.get("search")
         limit = params["limit"]  # None means "no cap -- fetch every match"
+        resolved_sort = params["sort"] if params["sort"] is not None else _DEFAULT_SORT
 
         nodes: list[dict[str, Any]] = []
         total_count = 0
@@ -336,7 +498,7 @@ class PolicyFindingsModule(_base.ReportModule):
 
         while limit is None or len(nodes) < limit:
             page_size = _PAGE_CHUNK if limit is None else min(_PAGE_CHUNK, limit - len(nodes))
-            variables: dict[str, Any] = {"pageSize": page_size, "sort": _DEFAULT_SORT}
+            variables: dict[str, Any] = {"pageSize": page_size, "sort": resolved_sort}
             if cursor is not None:
                 variables["after"] = cursor
             if filt is not None:
@@ -374,8 +536,15 @@ class PolicyFindingsModule(_base.ReportModule):
         """Every column this module can project via `columns`, in
         registry order. `client`/`site_uuid`/`site_name` accepted for
         signature parity with the other modules' `list_columns` but
-        unused -- no custom fields or per-ICP labels on this surface."""
-        return [{"key": key, "label": label} for key, (label, _getter) in _COLUMN_REGISTRY.items()]
+        unused -- no custom fields or per-ICP labels on this surface.
+
+        Each entry also reports `sortable` -- whether this column can
+        be passed to `sort`. See `_POLICY_SORT_FIELD`'s comment for
+        which columns aren't and why."""
+        return [
+            {"key": key, "label": label, "sortable": key in _POLICY_SORT_FIELD}
+            for key, (label, _getter) in _COLUMN_REGISTRY.items()
+        ]
 
     def default_columns(self) -> list[str]:
         return list(_DEFAULT_COLUMNS)

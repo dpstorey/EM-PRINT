@@ -80,15 +80,16 @@ Operating principles:
    severity/VPR/CVEs) and `policy_findings` (Tenable's per-policy x
    asset `policyFindings` surface -- this is also what the product's
    GUI "Compliance"/"Policy Violations" pages show, just under a
-   different label). Both support `columns` the same way
-   asset_inventory does. `vulnerability_findings` also accepts a
-   `sort` param, but only for 3 columns (`finding_id`, `last_hit`,
-   `vpr_score`) -- the only ones confirmed sortable against a live
-   capture; check `list_available_columns`' `sortable` flag before
-   guessing at others. `policy_findings` does not accept `sort` yet at
-   all (no live confirmation of any customizable sort field on that
-   surface beyond its own fixed default). Both fall back to
-   most-recently-hit-first when `sort` is omitted.
+   different label). Both support `columns` and `sort` the same way
+   asset_inventory does, now confirmed against a real GraphQL schema
+   introspection query rather than inferred from captures:
+   `vulnerability_findings` sorts on every column except `cves`;
+   `policy_findings` sorts on every column except `resolved_hits`,
+   `active_policy_hits`, `policy_level`, `policy_enabled`, and the
+   `event_type_*` columns (no matching field on that surface's
+   sort/filter enum). Check `list_available_columns`' `sortable` flag
+   per column before guessing. Both fall back to most-recently-hit-
+   first when `sort` is omitted.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"

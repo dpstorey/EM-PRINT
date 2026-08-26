@@ -9,11 +9,9 @@ description: >
   despite the similar English name. A default 9-column set (policy,
   severity, status, category, active hits, first/last hit, source/
   destination assets) is used when `columns` is omitted; call
-  `list_available_columns` for the full set. Like vulnerability_findings,
-  this module does not accept a `sort` param yet -- rows are always
-  returned most-recently-hit first, a deliberate simplification while only
-  one sortable field on this GraphQL surface has been confirmed against
-  real, production usage.
+  `list_available_columns` for the full set. Accepts a `sort` param (see
+  below), confirmed against the live GraphQL schema. Omitting `sort`
+  returns rows most-recently-hit first, same as before.
 params:
   - name: limit
     type: integer
@@ -31,14 +29,15 @@ params:
     default: null
     description: "Optional minimum policy severity filter: none|low|medium|high. Applied server-side. Note this is a different 4-value enum from vulnerability_findings' 5-value severity_at_least."
   - name: status
-    type: string
+    type: array
     required: false
     default: null
     description: >-
-      Optional status filter, passed through as-is (e.g. "Open",
-      "Resolved") -- this surface does not have a fixed, closed status
-      enum the way vulnerability_findings' `status` does, so no fixed
-      value list is enforced here.
+      Optional finding status filter: one or more of active|resolved|
+      resurfaced (also accepts a single string, or a comma-separated
+      string) -- the same 3-value enum vulnerability_findings' `status`
+      uses, confirmed against the live GraphQL schema. Multiple values
+      are OR'd together. Applied server-side.
   - name: policy_id
     type: string
     required: false
@@ -82,4 +81,20 @@ params:
       dropped. Omitting `columns` uses the default 9-column set
       (policy_title, severity, status, category, active_hits, first_hit,
       last_hit, src_assets, dst_assets).
+  - name: sort
+    type: array
+    required: false
+    default: null
+    description: >-
+      Optional list of column selectors to sort rows by, in priority
+      order (also accepts a comma-separated string). Prefix a selector
+      with "-" for descending; ascending is the default. Not every
+      column is sortable -- resolved_hits, active_policy_hits,
+      policy_level, policy_enabled, and the event_type_* columns have
+      no matching field on this GraphQL surface's sort/filter enum and
+      are rejected with the sortable list in the error. Check
+      `list_available_columns`' `sortable` flag per column before
+      guessing. Omitting `sort` returns rows most-recently-hit first
+      (`last_hit` descending), the same default this module always
+      used.
 output_formats: [markdown, html]
