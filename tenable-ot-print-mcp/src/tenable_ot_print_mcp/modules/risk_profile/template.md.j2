@@ -23,7 +23,7 @@ _Vulnerability findings: {{ vuln_returned_count }} of {{ vuln_total_count }} sho
 | Last Seen | {{ asset.last_seen }} |
 | Lifecycle Status | {{ asset.lifecycle_status }} |
 
-## {{ risk_model }} Risk Assessment
+## {{ (risk_model ~ " ") if risk_model else "" }}Risk Assessment
 
 {% if risk_grades %}
 | Category | Grade | Detail |

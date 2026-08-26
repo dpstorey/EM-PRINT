@@ -522,7 +522,16 @@ _MAX_LIMIT = 500
 # rubric or scale (letters, numbers, whatever); it only bounds the
 # *shape* of whatever a caller supplies or a custom field already holds.
 _MAX_RISK_DIMENSIONS = 20
-_DEFAULT_RISK_MODEL_LABEL = "Risk Assessment"
+# 2026-08-26, per Dom's own live report: this used to be the string
+# "Risk Assessment" -- which, combined with the heading template's own
+# fixed "Risk Assessment" suffix, rendered "Risk Assessment Risk
+# Assessment" whenever a caller omitted `risk_model` (every report so
+# far had passed one, so this went unnoticed until now). Empty string
+# is the correct default: it means "no display-name prefix", and the
+# template (see template.md.j2) only adds a prefix + space when
+# `risk_model` is non-empty, so an omitted `risk_model` now renders
+# the heading as just "Risk Assessment", not doubled.
+_DEFAULT_RISK_MODEL_LABEL = ""
 
 
 def _unwrap_nodes(connection: dict[str, Any] | None) -> list[Any]:
@@ -899,7 +908,7 @@ class RiskProfileModule(_base.ReportModule):
             "policy_since": params.get("policy_since"),
             "peer_limit": _clamp(params.get("peer_limit"), _DEFAULT_PEER_LIMIT),
             "peer_since": params.get("peer_since"),
-            "risk_model": (risk_model or _DEFAULT_RISK_MODEL_LABEL).strip() or _DEFAULT_RISK_MODEL_LABEL,
+            "risk_model": (risk_model or _DEFAULT_RISK_MODEL_LABEL).strip(),
             "risk_grades": _validate_risk_grades(params.get("risk_grades")),
             "risk_grade_fields": _validate_str_map(params.get("risk_grade_fields"), field="risk_grade_fields"),
             "risk_dimension_labels": _validate_str_map(params.get("risk_dimension_labels"), field="risk_dimension_labels"),
