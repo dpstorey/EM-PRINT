@@ -116,6 +116,19 @@ params:
       `risk_grades`/`risk_grade_fields`, e.g. {"R": "Reputational", "A":
       "Financial Cost"}. Purely cosmetic (report column headers) -- a
       dimension with no configured label just displays its own code.
+  - name: risk_grade_descriptions
+    type: object
+    required: false
+    default: null
+    description: >-
+      Optional per-dimension text explaining what this asset's assigned
+      grade means, e.g. {"R": "No harm or slight client concern", "A":
+      "Potential equipment or asset damage or financial loss $100K-1M"}.
+      Rendered in the grade table's "Detail" column next to that
+      dimension's "Category"/"Grade" cells. A dimension with no
+      configured description renders a blank Detail cell -- this module
+      has no built-in scale-to-text mapping for any rubric (RAISE or
+      otherwise), so the text is entirely caller-supplied.
   - name: risk_scale_note
     type: array
     required: false

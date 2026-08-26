@@ -67,10 +67,29 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
    A" caveat -- `risk_model` (display name), `risk_grades` /
    `risk_grade_fields` (arbitrary dimension codes, letters or numbers or
    words), `risk_dimension_labels` (short code -> long display name),
-   and `risk_scale_note` (freeform caveat text) are all caller-supplied.
+   `risk_grade_descriptions` (short code -> freeform text explaining
+   what this asset's assigned grade means for that dimension), and
+   `risk_scale_note` (freeform caveat text) are all caller-supplied.
    This module validates shape only -- string keys, scalar values -- and
    never validates against or computes a specific scale. RAISE is simply
    what Dom's own callers pass today, not something this module assumes.
+
+   **Table restructured to long form (2026-08-26, per Dom, who shared a
+   reference screenshot).** The grade table was one wide row (each
+   dimension code its own column, one shared row of grade letters) --
+   Dom asked for a per-dimension row instead: `Category` | `Grade` |
+   `Detail`, so the grade sits directly next to a description of what
+   it means for that dimension, rather than requiring a reader to
+   cross-reference a `risk_scale_note` written separately. `Category`
+   reuses the exact same "{code} ({label})" formatting the old header
+   row used; `Detail` is new -- there was no per-dimension description
+   text anywhere in this module before, so `risk_grade_descriptions`
+   is a new caller-supplied param (same shape as `risk_dimension_labels`
+   -- {dimension: text}), not derived or computed. A dimension with no
+   configured description renders a blank `Detail` cell, same as a
+   `risk_grades` dimension with no configured label renders its bare
+   code -- missing optional annotations degrade gracefully rather than
+   erroring.
 
 3. "Attack pathways" in EM-MCP's own tools (`query_attack_pathways`) is,
    by its own docstring, just the 1-hop `links` neighborhood -- "the
@@ -686,6 +705,7 @@ class RiskProfileModule(_base.ReportModule):
             "risk_grades",
             "risk_grade_fields",
             "risk_dimension_labels",
+            "risk_grade_descriptions",
             "risk_scale_note",
             "analyst_assessment",
             "data_limitations",
@@ -729,6 +749,7 @@ class RiskProfileModule(_base.ReportModule):
             "risk_grades": _validate_risk_grades(params.get("risk_grades")),
             "risk_grade_fields": _validate_str_map(params.get("risk_grade_fields"), field="risk_grade_fields"),
             "risk_dimension_labels": _validate_str_map(params.get("risk_dimension_labels"), field="risk_dimension_labels"),
+            "risk_grade_descriptions": _validate_str_map(params.get("risk_grade_descriptions"), field="risk_grade_descriptions"),
             "risk_scale_note": _normalize_str_list(params.get("risk_scale_note"), field="risk_scale_note"),
             "analyst_assessment": _normalize_str_list(params.get("analyst_assessment"), field="analyst_assessment"),
             "data_limitations": _normalize_str_list(params.get("data_limitations"), field="data_limitations"),
@@ -936,6 +957,7 @@ class RiskProfileModule(_base.ReportModule):
             "risk_model": params["risk_model"],
             "risk_grades": risk_grades,
             "risk_dimension_labels": params["risk_dimension_labels"],
+            "risk_grade_descriptions": params["risk_grade_descriptions"],
             "risk_scale_note": params["risk_scale_note"],
             "vulnerabilities": vulns,
             "vuln_returned_count": len(vulns),

@@ -26,10 +26,10 @@ _Vulnerability findings: {{ vuln_returned_count }} of {{ vuln_total_count }} sho
 ## {{ risk_model }} Risk Assessment
 
 {% if risk_grades %}
-| {% for dim in risk_grades %}{{ (dim ~ " (" ~ risk_dimension_labels[dim] ~ ")") if dim in risk_dimension_labels else dim }} | {% endfor %}
-|{% for dim in risk_grades %} :---: |{% endfor %}
-| {% for dim, value in risk_grades.items() %}{{ value }} | {% endfor %}
-
+| Category | Grade | Detail |
+|---|:---:|---|
+{% for dim, value in risk_grades.items() %}| {{ (dim ~ " (" ~ risk_dimension_labels[dim] ~ ")") if dim in risk_dimension_labels else dim }} | {{ value }} | {{ risk_grade_descriptions[dim] if dim in risk_grade_descriptions else "" }} |
+{% endfor %}
 {% for line in risk_scale_note %}
 > {{ line }}
 {% endfor %}
