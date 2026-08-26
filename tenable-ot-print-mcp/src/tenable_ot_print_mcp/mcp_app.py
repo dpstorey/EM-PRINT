@@ -18,6 +18,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .audit import AuditLog
 from .config import Config, get_ca_bundle_path, get_output_dir
 from .modules import discover_manifests, load_module
+from .retention import RetentionStore, apply_purge, list_report_jobs, plan_purge, validate_policy
 from .tenable_client import TenableClient
 
 SERVER_INSTRUCTIONS = """\
@@ -119,6 +120,18 @@ Operating principles:
    banner-style header logo) exists for reports that want a distinct
    look from `default`; call `list_themes` to see what's available in
    a given deployment.
+
+11. Rendered reports accumulate on this server's filestore with no
+   automatic cleanup. `set_report_retention_policy` saves a rule once
+   (mode='count'/'days'/'weeks'/'months', plus a value) -- one global
+   rule, not per module. `purge_reports` applies that saved rule;
+   it defaults to `dry_run=true`, which only reports what WOULD be
+   deleted, so treat that preview as a real answer on its own and
+   only pass `dry_run=false` after the user has actually confirmed
+   they want the deletion to happen -- same "require explicit
+   confirmation immediately before any write" rule as everywhere
+   else, since deleting reports is a write. `get_report_retention_policy`
+   checks whether a rule is already saved before guessing one.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"
@@ -140,6 +153,7 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
         ca_bundle=str(ca_bundle) if ca_bundle else None,
     )
     output_dir = get_output_dir()
+    retention_store = RetentionStore(data_dir)
 
     mcp = FastMCP(
         name="tenable-ot-print-mcp",
@@ -322,5 +336,80 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
         if lister is None:
             return {"module": module, "names": None, "note": "This module does not support stored risk-grade scales."}
         return {"module": module, "names": lister(data_dir)}
+
+    @mcp.tool(
+        title="Set report retention policy",
+        description=(
+            "Saves a rule for how many rendered reports to keep on this server, so "
+            "a later purge_reports call can just apply it without respecifying it "
+            "every time -- e.g. mode='count', value=10 ('keep the last 10 reports') "
+            "or mode='days'/'weeks'/'months', value=N ('keep reports from the last "
+            "N days/weeks/months'). One global rule across every report module, "
+            "not per-module. Overwrites any previously saved rule. 'months' is "
+            "approximated as 30-day blocks, not calendar months. A 'report' is "
+            "one submit_report_job call's .md+.html pair, always kept or deleted "
+            "together as one unit."
+        ),
+    )
+    async def set_report_retention_policy(mode: str, value: int) -> dict[str, Any]:
+        policy = validate_policy(mode, value)
+        retention_store.save(policy)
+        return {"saved": policy.to_dict()}
+
+    @mcp.tool(
+        title="Get report retention policy",
+        description="Returns the currently saved report-retention rule, or null if none has been set yet.",
+    )
+    async def get_report_retention_policy() -> dict[str, Any]:
+        policy = retention_store.load()
+        return {"policy": policy.to_dict() if policy else None}
+
+    @mcp.tool(
+        title="Purge old reports",
+        description=(
+            "Applies the saved report-retention policy (set via "
+            "set_report_retention_policy) to this server's report filestore, "
+            "deleting jobs beyond the configured count or older than the "
+            "configured time window, oldest first. dry_run=true (the default) "
+            "only reports what WOULD be deleted -- pass dry_run=false to actually "
+            "delete. Errors, naming set_report_retention_policy, if no policy has "
+            "been set yet. Only ever touches files matching this server's own "
+            "report-filename convention; anything else in the filestore is left "
+            "alone untouched."
+        ),
+    )
+    async def purge_reports(dry_run: bool = True) -> dict[str, Any]:
+        policy = retention_store.load()
+        if policy is None:
+            raise ValueError(
+                "No report-retention policy has been set yet. Call "
+                "set_report_retention_policy(mode, value) first -- e.g. "
+                "mode='count', value=10, or mode='days', value=30."
+            )
+        jobs = list_report_jobs(output_dir)
+        to_keep, to_delete = plan_purge(jobs, policy)
+        result: dict[str, Any] = {
+            "policy": policy.to_dict(),
+            "total_jobs": len(jobs),
+            "kept_count": len(to_keep),
+            "dry_run": dry_run,
+        }
+        if dry_run:
+            result["would_delete_count"] = len(to_delete)
+            result["would_delete"] = [
+                {"module": j.module, "base": j.base, "timestamp": j.timestamp.isoformat()} for j in to_delete
+            ]
+            audit.record(event="report_purge_preview", outcome="ok", params={"policy": policy.to_dict()})
+            return result
+        deleted_paths = apply_purge(to_delete)
+        result["deleted_count"] = len(deleted_paths)
+        result["deleted"] = deleted_paths
+        audit.record(
+            event="report_purge",
+            outcome="ok",
+            params={"policy": policy.to_dict()},
+            output_paths=deleted_paths,
+        )
+        return result
 
     return mcp.streamable_http_app()
