@@ -17,6 +17,18 @@ per-report with their own logo via `theme_overrides={"logo_data_uri":
 everything else in `theme_context` below, so no new plumbing was
 needed for that half of the ask; only the *default* branded logo is
 new.
+
+Per-theme CSS (2026-08-26, for the risk_profile module's dark/banner
+report look): a theme directory may also bundle `styles.css` -- plain
+CSS, not Jinja-templated (no per-report variables needed here), read
+verbatim and cached the same way as the logo assets. It's layered INTO
+the document as a second <style> block, placed after the shared base
+CSS in _HTML_SHELL, not instead of it -- cascade order means an
+equal-specificity rule in a theme's styles.css overrides the base
+(e.g. `body { background: #192224; color: #fff; }` rather than
+redeclaring every rule the base stylesheet already sets). A theme with
+no styles.css (every theme before this one, including `default`)
+changes nothing -- the extra <style> block is just empty.
 """
 
 from __future__ import annotations
@@ -51,6 +63,9 @@ _HTML_SHELL = """<!DOCTYPE html>
   .report-header-meta, .report-footer-meta {{ color: #666; font-size: 0.85rem; }}
   .report-footer {{ display: flex; align-items: center; gap: 0.5rem; border-top: 1px solid #ccc; margin-top: 2rem; padding-top: 0.5rem; }}
   .report-footer-mini-logo {{ height: 16px; width: auto; flex-shrink: 0; }}
+</style>
+<style>
+{extra_css}
 </style>
 </head>
 <body>
@@ -88,6 +103,18 @@ def _theme_asset_data_uri(theme_dir: Path, stem: str) -> str | None:
         encoded = base64.b64encode(candidate.read_bytes()).decode("ascii")
         return f"data:{mime};base64,{encoded}"
     return None
+
+
+@lru_cache(maxsize=None)
+def _theme_css(theme_dir: Path) -> str:
+    """`<theme_dir>/styles.css` -> its contents, or "" if the theme has
+    no custom stylesheet. See module docstring for why this is layered
+    on top of the base CSS rather than replacing it, and why it's read
+    verbatim rather than Jinja-rendered."""
+    css_path = theme_dir / "styles.css"
+    if not css_path.is_file():
+        return ""
+    return css_path.read_text(encoding="utf-8")
 
 
 @dataclass(frozen=True)
@@ -155,6 +182,7 @@ def render_report(
         header=header_html,
         body=body_html,
         footer=footer_html,
+        extra_css=_theme_css(theme_dir),
     )
 
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")

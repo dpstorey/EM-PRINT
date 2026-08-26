@@ -1,0 +1,8 @@
+<header class="report-header">
+  {% if logo_data_uri %}<img class="report-header-logo" src="{{ logo_data_uri }}" alt="">{% endif %}
+  <div class="report-header-text">
+    <div class="report-header-title">{{ report_title }}</div>
+    <div class="report-header-meta">Generated {{ generated_at }}</div>
+    {% if header_message %}<div class="report-header-message">{{ header_message }}</div>{% endif %}
+  </div>
+</header>

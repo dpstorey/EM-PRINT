@@ -1,0 +1,94 @@
+_Vulnerabilities: {{ vuln_returned_count }} of {{ vuln_total_count }} shown &middot; Events: {{ event_returned_count }} of {{ event_total_count }} shown &middot; Communication peers: {{ peer_returned_count }} of {{ peer_total_count }} shown._
+
+## Asset
+
+| Field | Value |
+|---|---|
+| Name | {{ asset.name }} |
+| Type | {{ asset.type }} ({{ asset.super_type }}) |
+| Category | {{ asset.category }} |
+| Vendor / Model | {{ asset.vendor }} / {{ asset.model }} |
+| Firmware | {{ asset.firmware_version }} |
+| OS / Family | {{ asset.os }} / {{ asset.family }} |
+| Purdue Level | {{ asset.purdue_level }} |
+| Criticality | {{ asset.criticality }} |
+| Run Status | {{ asset.run_status }} ({{ asset.extended_run_status }}) |
+| Location | {{ asset.location }} |
+| Description | {{ asset.description }} |
+| IPs | {{ asset.ips | join(", ") }} |
+| MACs | {{ asset.macs | join(", ") }} |
+| Segments | {{ asset.segments | join(", ") }} |
+| Total Risk | {{ asset.total_risk }} |
+| Plugin Count | {{ asset.plugin_count }} |
+| Unresolved Events | {{ asset.unresolved_events }} |
+| First / Last Seen | {{ asset.first_seen }} / {{ asset.last_seen }} |
+| Lifecycle Status | {{ asset.lifecycle_status }} |
+
+## {{ risk_model }} Grades
+
+{% if risk_grades %}
+| {% for dim in risk_grades %}{{ risk_dimension_labels.get(dim, dim) }} | {% endfor %}
+
+|{% for dim in risk_grades %} :---: |{% endfor %}
+
+| {% for dim, value in risk_grades.items() %}{{ value }} | {% endfor %}
+
+{% else %}
+_No risk grades supplied for this report._
+{% endif %}
+{% for line in risk_scale_note %}
+> {{ line }}
+{% endfor %}
+
+## Vulnerabilities
+
+{% if vulnerabilities %}
+| Plugin | Severity | VPR Score | VPR Level | CVSS3 | CVEs | Exploit Available | KEV |
+|---|---|---:|---|---:|---|:---:|:---:|
+{% for v in vulnerabilities %}| {{ v.plugin_name }} | {{ v.severity }} | {{ v.vpr_score }} | {{ v.vpr_level }} | {{ v.cvss3_score }} | {{ v.cves }} | {{ "Yes" if v.exploit_available else "No" }} | {{ "Yes" if v.kev else "No" }} |
+{% endfor %}
+{% else %}
+_No vulnerabilities returned for this asset._
+{% endif %}
+
+## Recent Events
+
+{% if events %}
+| Time | Type | Severity | Src IP | Dst IP | Protocol | Port | Policy | Resolved |
+|---|---|---|---|---|---|---:|---|:---:|
+{% for e in events %}| {{ e.time }} | {{ e.type }} | {{ e.severity }} | {{ e.src_ip }} | {{ e.dst_ip }} | {{ e.protocol }} | {{ e.port }} | {{ e.policy_title }} | {{ "Yes" if e.resolved else "No" }} |
+{% endfor %}
+{% else %}
+_No events returned for this asset._
+{% endif %}
+
+## Communication Peers (1-Hop Attack-Pathway Neighborhood)
+
+{% if peers %}
+| Peer Asset ID | Protocols | Industrial Protocols | Traffic | Conversations | Last Seen |
+|---|---|---|---:|---:|---|
+{% for p in peers %}| {{ p.peer_asset_id }} | {{ p.protocols }} | {{ p.industrial_protocols }} | {{ p.traffic }} | {{ p.conversation_count }} | {{ p.last_conversation }} |
+{% endfor %}
+{% else %}
+_No communication peers returned for this asset._
+{% endif %}
+
+Call `get_asset` on a peer's id to enrich it with name/vendor/type, or run this report against it to expand the neighborhood further -- this server does not compute multi-hop paths itself.
+
+## Analyst Assessment
+
+{% if analyst_assessment %}
+{% for line in analyst_assessment %}- {{ line }}
+{% endfor %}
+{% else %}
+_None supplied._
+{% endif %}
+
+## Data Limitations
+
+{% if data_limitations %}
+{% for line in data_limitations %}- {{ line }}
+{% endfor %}
+{% else %}
+_None._
+{% endif %}

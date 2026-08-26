@@ -1,0 +1,134 @@
+name: risk_profile
+title: Asset Risk Profile
+description: >
+  A single-asset risk-profile dossier: asset identity, vulnerabilities,
+  recent events, and a 1-hop communication/attack-pathway neighborhood,
+  fetched live from a paired ICP, plus a risk-grade table. Replaces the
+  ad hoc LLM-authored HTML report workflow previously used for this --
+  same deterministic module+render+theme pipeline every other report in
+  this project uses.
+
+  Risk grades are NOT computed by this module -- there is no rubric
+  hardcoded here (RAISE or otherwise). A grade for each dimension can
+  come from Tenable's own asset custom fields (already assigned through
+  Tenable's UI -- see `risk_grade_fields`), from the caller for this
+  report only (`risk_grades`, overriding a custom-field value per
+  dimension if both are present), or from neither (rendered as "-").
+  Dimension codes, labels, and value scale (letters, numbers, words)
+  are entirely caller-defined; use whatever your organization's rubric
+  already uses.
+params:
+  - name: asset_id
+    type: string
+    required: true
+    default: null
+    description: "The asset's id, as returned by asset_inventory or any of EM-MCP's asset tools."
+  - name: site_uuid
+    type: string
+    required: false
+    default: null
+    description: "Target ICP's machine id (UUID). If omitted and exactly one ICP is paired to this EM, that ICP is used automatically; if more than one is paired, this or site_name becomes required."
+  - name: site_name
+    type: string
+    required: false
+    default: null
+    description: "Target ICP by its paired name instead of site_uuid. Same auto-resolution rule applies."
+  - name: vuln_limit
+    type: integer
+    required: false
+    default: 100
+    description: "Maximum vulnerabilities to include (max 500). This is a detail-report bundle, not a paginated list -- one capped page, not a full walk."
+  - name: vuln_severity_at_least
+    type: string
+    required: false
+    default: null
+    description: "Optional minimum plugin severity filter: info|low|medium|high|critical."
+  - name: event_limit
+    type: integer
+    required: false
+    default: 50
+    description: "Maximum recent events to include (max 500), most-recent first."
+  - name: event_since
+    type: string
+    required: false
+    default: null
+    description: "Optional ISO-8601 timestamp; only events at or after this time. Omitting it returns the most recent event_limit events regardless of time -- no time window is invented if you don't ask for one."
+  - name: event_resolved
+    type: boolean
+    required: false
+    default: null
+    description: "Optional filter on event resolved-state. Omit to include both resolved and unresolved."
+  - name: peer_limit
+    type: integer
+    required: false
+    default: 50
+    description: "Maximum communication peers (the 1-hop attack-pathway neighborhood) to include (max 500), most-recently-seen first."
+  - name: peer_since
+    type: string
+    required: false
+    default: null
+    description: "Optional ISO-8601 timestamp; only include peer links last seen at or after this time."
+  - name: risk_model
+    type: string
+    required: false
+    default: "Risk Assessment"
+    description: "Display name for the risk-grade section (e.g. 'RAISE', 'CVSS-based', or your organization's own model name). Cosmetic only -- has no effect on validation."
+  - name: risk_grades
+    type: object
+    required: false
+    default: null
+    description: >-
+      Grades for this report, one entry per risk dimension: an object
+      like {"R": "B", "A": "C", ...} or {"Likelihood": "3", "Impact":
+      "4"} -- any dimension codes, any value scale (letters, numbers,
+      words). Overrides a same-named dimension from `risk_grade_fields`
+      if both are present; a dimension with no value at all renders as
+      "-". This module validates shape only, never a specific scale --
+      it does not compute grades.
+  - name: risk_grade_fields
+    type: object
+    required: false
+    default: null
+    description: >-
+      Optional: read a dimension's grade from a Tenable asset custom
+      field already populated through Tenable's own UI, instead of (or
+      as a default under) `risk_grades`. An object mapping dimension
+      code to that custom field's live operator-configured label (e.g.
+      {"R": "RAISE-R"}) or its stable slot name (customField1..
+      customField10). Unknown labels/slots are rejected with the
+      current configured list.
+  - name: risk_dimension_labels
+    type: object
+    required: false
+    default: null
+    description: >-
+      Optional display labels for the dimension codes used in
+      `risk_grades`/`risk_grade_fields`, e.g. {"R": "Reputational", "A":
+      "Financial Cost"}. Purely cosmetic (report column headers) -- a
+      dimension with no configured label just displays its own code.
+  - name: risk_scale_note
+    type: array
+    required: false
+    default: null
+    description: >-
+      Optional freeform caveat text about how to read the grade scale
+      (also accepts a single string, or a comma-separated string) --
+      e.g. a note that a grade letter and a dimension name can share the
+      same letter and shouldn't be confused. Rendered verbatim under the
+      grade table if supplied; omitted otherwise.
+  - name: analyst_assessment
+    type: array
+    required: false
+    default: null
+    description: "Optional freeform analyst narrative lines (also accepts a single string). This module never generates narrative content itself -- it's the caller's judgment, merged with the fetched hard data at render time."
+  - name: data_limitations
+    type: array
+    required: false
+    default: null
+    description: >-
+      Optional freeform data-limitation lines (also accepts a single
+      string) -- e.g. a partial site, an unavailable data source. This
+      module auto-appends its own truncation disclosures (e.g.
+      "Vulnerabilities: showing 100 of 340 total.") on top of whatever
+      you supply here, so you don't need to restate those.
+output_formats: [markdown, html]

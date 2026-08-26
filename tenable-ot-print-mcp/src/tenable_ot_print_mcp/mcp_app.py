@@ -90,6 +90,26 @@ Operating principles:
    sort/filter enum). Check `list_available_columns`' `sortable` flag
    per column before guessing. Both fall back to most-recently-hit-
    first when `sort` is omitted.
+
+9. `risk_profile` generates a single-asset risk dossier (identity,
+   vulnerabilities, recent events, a 1-hop communication/attack-pathway
+   neighborhood) plus a risk-grade table. Grades are never computed by
+   this server -- pass `risk_grades` for this report, or
+   `risk_grade_fields` to read a grade already assigned on the asset
+   via Tenable's own custom fields (mapped by their live label or slot
+   name). The rubric is entirely caller-defined: dimension codes,
+   display labels (`risk_dimension_labels`), and value scale (letters,
+   numbers, words) are whatever your organization's model uses --
+   nothing here assumes a specific one.
+
+10. Themes control visual layout/branding (see point 2), and as of the
+   `risk_profile` module, that now includes color/typography too, not
+   just header/footer content -- a theme directory may bundle
+   `styles.css` on top of `header.html.j2`/`footer.html.j2`. The
+   `dark-banner` theme (dark background, high-contrast accent, a large
+   banner-style header logo) exists for reports that want a distinct
+   look from `default`; call `list_themes` to see what's available in
+   a given deployment.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"

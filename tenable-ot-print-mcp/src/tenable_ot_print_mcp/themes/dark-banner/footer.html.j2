@@ -1,0 +1,7 @@
+<footer class="report-footer">
+  {% if mini_logo_data_uri %}<img class="report-footer-mini-logo" src="{{ mini_logo_data_uri }}" alt="">{% endif %}
+  <div class="report-footer-text">
+    {% if footer_message %}<div class="report-footer-message">{{ footer_message }}</div>{% endif %}
+    <div class="report-footer-meta">Tenable One OT Exposure Print Report MCP &middot; {{ report_title }} &middot; {{ generated_at }}</div>
+  </div>
+</footer>

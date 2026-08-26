@@ -1,0 +1,58 @@
+/* dark-banner theme — layered on top of render.py's base CSS, not a
+   replacement for it (see render.py's _theme_css docstring): only the
+   selectors below are overridden, everything else (table layout,
+   spacing, etc.) still comes from the shared base stylesheet. */
+
+body {
+  background: #192224;
+  color: #ffffff;
+}
+
+h1, h2, h3 {
+  color: #ecff53;
+}
+
+a {
+  color: #ecff53;
+}
+
+table {
+  border: 1px solid #ecff53;
+}
+
+th {
+  background: #ecff53;
+  color: #192224;
+}
+
+td {
+  border: 1px solid #ecff53;
+  color: #ffffff;
+}
+
+.report-header {
+  display: block;
+  border-bottom: 1px solid #ecff53;
+  text-align: center;
+}
+
+.report-header-logo {
+  height: auto;
+  width: 1400px;
+  max-width: 100%;
+  display: block;
+  margin: 0 auto 1rem;
+}
+
+.report-header-text {
+  text-align: center;
+}
+
+.report-header-meta,
+.report-footer-meta {
+  color: #cfcfcf;
+}
+
+.report-footer {
+  border-top: 1px solid #ecff53;
+}
