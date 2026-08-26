@@ -56,8 +56,11 @@ params:
       insensitive; duplicates collapsed). Call `list_available_columns`
       for this module's full key/label list and its default set before
       guessing names -- an unknown name is rejected outright rather
-      than silently dropped. Omitting `columns` uses that default set
-      (the original 9-column report: name, vendor, model,
-      firmware_version, criticality, ip, last_seen, total_risk,
-      unresolved_events).
+      than silently dropped. A custom-field slot can be given either
+      by its stable key (custom_field_1..custom_field_10) or by its
+      live operator-configured name (e.g. "Owner") exactly as Tenable
+      OT's own UI shows it -- that UI never shows the stable key.
+      Omitting `columns` uses that default set (the original 9-column
+      report: name, vendor, model, firmware_version, criticality, ip,
+      last_seen, total_risk, unresolved_events).
 output_formats: [markdown, html]

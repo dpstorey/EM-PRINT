@@ -58,6 +58,14 @@ Operating principles:
    outright rather than silently ignored, so it's cheaper to check
    first than to retry after an error. A module that doesn't support
    column selection returns `columns: null` from that call.
+
+6. For asset_inventory specifically, custom fields are selectable
+   either by their stable key (`custom_field_1`..`custom_field_10`)
+   or by their live operator-configured name (e.g. "Owner", "Geotag")
+   -- exactly as that name appears in Tenable OT's own UI, since the
+   stable key is never shown there. Pass `site_uuid`/`site_name` to
+   `list_available_columns` to see the live names for a specific ICP
+   before picking one.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"
@@ -175,7 +183,11 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
             "live per-ICP configuration (e.g. asset_inventory's custom-field slots, "
             "which show their operator-configured label like 'Plant ID' once the "
             "ICP is known) -- otherwise those columns fall back to a generic label "
-            "like 'Custom Field 3'. Omit both on a single-ICP EM; it auto-resolves."
+            "like 'Custom Field 3'. Omit both on a single-ICP EM; it auto-resolves.\n\n"
+            "For asset_inventory, a custom-field slot's live label (the `label` "
+            "shown here) works directly in `columns` too, not just its `key` -- "
+            "use whichever one Tenable OT's own UI actually shows you, since the "
+            "stable key is never displayed there."
         ),
     )
     async def list_available_columns(

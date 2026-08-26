@@ -152,11 +152,18 @@ query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $searc
 # `CustomFieldLabelCache` (tools/assets.py) exactly -- same query,
 # same TTL, same icp-scoped cache key -- rather than inventing a
 # different caching scheme for the same underlying Tenable feature.
-# Labels are used for *display* only (report column headers, and
-# `list_available_columns`'s reported label) -- `columns` selection
-# still uses the stable `custom_field_1`.."custom_field_10"` keys, on
-# purpose: those never change even if an operator renames a slot's
-# label later, so a saved report request never silently breaks.
+#
+# Labels are used for *display* (report column headers,
+# `list_available_columns`'s reported label) AND, as of 2026-08-26,
+# for *selection* too: Dom pointed out Tenable's own UI never shows
+# the `custom_field_N` <-> live-name mapping at all (a custom field
+# there is just "Owner" or "Geotag", never "Custom Field 5" -- see the
+# GREEN-COMMS asset-detail screenshot), so a caller working from what
+# the product actually shows has no way to discover the stable key
+# exists. `columns` now accepts either: the stable `custom_field_1`..
+# `custom_field_10` key (unaffected by a later rename, and the only
+# option if a slot has no configured label at all) or the slot's live
+# name, matched case-insensitively. See `_resolve_columns` below.
 _QUERY_CUSTOM_FIELDS = "query Q { customFields { fieldId userDefinedName valueType } }"
 
 
@@ -201,6 +208,16 @@ def _custom_field_slot(column_key: str) -> str | None:
     if not column_key.startswith(prefix):
         return None
     return "customField" + column_key[len(prefix) :]
+
+
+def _custom_field_key_for_slot(slot: str) -> str | None:
+    """`"customField3"` -> `"custom_field_3"` -- the reverse of `_custom_field_slot`,
+    used to turn a live-resolved custom-field label back into its internal
+    `_COLUMN_REGISTRY` key."""
+    prefix = "customField"
+    if not slot.startswith(prefix):
+        return None
+    return "custom_field_" + slot[len(prefix) :]
 
 
 # Tenable's AssetExpressionsParams op vocabulary (see EM-MCP's
@@ -350,8 +367,6 @@ _COLUMN_REGISTRY: dict[str, tuple[str, Callable[[dict[str, Any]], Any]]] = {
     "custom_field_10": ("Custom Field 10", lambda n: n.get("customField10")),
 }
 
-_KNOWN_COLUMNS = frozenset(_COLUMN_REGISTRY)
-
 # Omitting `columns` must reproduce exactly the report shape every
 # earlier §0.x entry in design-notes.md was tested against -- this is
 # that original hand-picked 9-column set, unchanged.
@@ -366,6 +381,61 @@ _DEFAULT_COLUMNS = (
     "total_risk",
     "unresolved_events",
 )
+
+
+def _resolve_columns(requested: list[str], custom_field_labels: dict[str, str]) -> list[str]:
+    """Resolve a caller's raw `columns` request into final internal
+    `_COLUMN_REGISTRY` keys.
+
+    Every static column is still selected by its stable key
+    (case-insensitive), same as always. The 10 `custom_field_N` slots
+    additionally accept their live operator-configured name (also
+    case-insensitive) as of 2026-08-26 -- see the comment above
+    `_QUERY_CUSTOM_FIELDS` for why the stable-key-only rule from
+    section 0.13 didn't survive contact with Tenable's real UI. Both
+    forms resolve to the same internal key, so `to_markdown_context`
+    and `_COLUMN_REGISTRY` don't need to know which form was used.
+
+    Needs `custom_field_labels` (this ICP's live {slot: label} map)
+    to recognize the name form at all -- which means, unlike the
+    purely-structural checks in `validate_params`, this can only run
+    after a client is available (see `fetch_data`), so a bad column
+    name is now only caught after that live lookup rather than
+    immediately at job submission.
+    """
+    name_to_key: dict[str, str] = {key.lower(): key for key in _COLUMN_REGISTRY}
+    for slot, label in custom_field_labels.items():
+        key = _custom_field_key_for_slot(slot)
+        norm_label = (label or "").strip().lower()
+        if key and norm_label:
+            # A later slot silently wins a same-named collision --
+            # two custom fields sharing one operator-typed name is an
+            # edge case not worth failing every report over.
+            name_to_key[norm_label] = key
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for raw in requested:
+        key = name_to_key.get(raw.strip().lower())
+        if key is None:
+            static_names = sorted(k for k in _COLUMN_REGISTRY if _custom_field_slot(k) is None)
+            custom_names = []
+            for i in range(1, 11):
+                slot_key = f"custom_field_{i}"
+                label = custom_field_labels.get(_custom_field_slot(slot_key))
+                custom_names.append(f"{slot_key} ({label!r})" if label else slot_key)
+            raise ValueError(
+                f"Unknown column {raw!r}. Available columns: {static_names + custom_names}."
+            )
+        if key not in seen:
+            seen.add(key)
+            resolved.append(key)
+    if not resolved:
+        raise ValueError(
+            "columns must not be empty; omit it entirely to use the default columns "
+            f"{list(_DEFAULT_COLUMNS)}."
+        )
+    return resolved
 
 
 def _build_filter(params: dict[str, Any]) -> dict | None:
@@ -461,12 +531,22 @@ class AssetInventoryModule(_base.ReportModule):
         site_name = params.get("site_name")
         search = params.get("search")
 
-        # `columns` (§0.10): optional list of column names (or a
-        # comma-separated string -- LLM callers sometimes serialize
-        # arrays that way), validated against the full _COLUMN_REGISTRY,
-        # deduped, and order-preserving so a caller can also control
-        # column order. Omitting it reproduces the original 9-column
-        # report (_DEFAULT_COLUMNS) so existing callers see no change.
+        # `columns` (§0.10, revised §0.14): optional list of column
+        # names (or a comma-separated string -- LLM callers sometimes
+        # serialize arrays that way), order-preserving so a caller can
+        # also control column order. Omitting it reproduces the
+        # original 9-column report (_DEFAULT_COLUMNS) so existing
+        # callers see no change.
+        #
+        # Only *structural* validation happens here -- this method has
+        # no `client`, and as of §0.14 a custom-field slot can be named
+        # by its live operator-configured label as well as its stable
+        # `custom_field_N` key, and that label can only be checked once
+        # it's fetched. Final resolution against the full known-column
+        # set (static keys + this ICP's live custom-field names)
+        # happens in `fetch_data` via `_resolve_columns`, so an
+        # unknown/misspelled name is still rejected outright -- just a
+        # bit later in the pipeline than before.
         columns_param = params.get("columns")
         if columns_param is None:
             columns = list(_DEFAULT_COLUMNS)
@@ -477,19 +557,7 @@ class AssetInventoryModule(_base.ReportModule):
                 raise ValueError(
                     f"columns must be a list of column names, got {columns_param!r}"
                 )
-            seen: set[str] = set()
-            columns = []
-            for raw in columns_param:
-                key = str(raw).strip().lower()
-                if not key:
-                    continue
-                if key not in _KNOWN_COLUMNS:
-                    raise ValueError(
-                        f"Unknown column {key!r}. Available columns: {sorted(_KNOWN_COLUMNS)}."
-                    )
-                if key not in seen:
-                    seen.add(key)
-                    columns.append(key)
+            columns = [str(raw).strip() for raw in columns_param if str(raw).strip()]
             if not columns:
                 raise ValueError(
                     "columns must not be empty; omit it entirely to use the default columns "
@@ -553,6 +621,15 @@ class AssetInventoryModule(_base.ReportModule):
         # fetched; column selection is applied later, in
         # to_markdown_context, as a display projection.
         icp_machine_id = await self._resolve_icp_machine_id(client, params)
+
+        # Resolve `columns` before paginating through assets -- both
+        # for a fast failure on a bad column name (no point fetching
+        # pages of assets for a request that's going to fail
+        # validation anyway) and because custom-field name resolution
+        # (§0.14) needs these labels regardless.
+        custom_field_labels = await _CustomFieldLabelCache.get_or_fetch(client, icp_machine_id)
+        resolved_columns = _resolve_columns(params["columns"], custom_field_labels)
+
         filt = _build_filter(params)
         search = params.get("search")
         limit = params["limit"]  # None means "no cap -- fetch every match"
@@ -592,18 +669,11 @@ class AssetInventoryModule(_base.ReportModule):
             if len(nodes) >= _SAFETY_MAX_ASSETS:
                 break
 
-        # Custom-field slot labels ("Plant ID" etc., configured by the
-        # operator in Tenable) are resolved live and cached per-ICP --
-        # fetched here (fetch_data is where client/network access
-        # happens) and carried through in the returned data so
-        # to_markdown_context (pure formatting, no client) can use them
-        # as display labels without a second network round trip.
-        custom_field_labels = await _CustomFieldLabelCache.get_or_fetch(client, icp_machine_id)
-
         return {
             "total_count": total_count,
             "nodes": nodes if limit is None else nodes[:limit],
             "custom_field_labels": custom_field_labels,
+            "columns": resolved_columns,
         }
 
     async def list_columns(
@@ -648,7 +718,12 @@ class AssetInventoryModule(_base.ReportModule):
         return list(_DEFAULT_COLUMNS)
 
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
-        column_keys: list[str] = params["columns"]
+        # Resolved by `_resolve_columns` in fetch_data (§0.14) -- by
+        # this point a custom-field slot named by its live label has
+        # already been turned into its internal `custom_field_N` key,
+        # so this is always a list of _COLUMN_REGISTRY keys, never a
+        # raw caller-supplied name.
+        column_keys: list[str] = data["columns"]
         custom_field_labels: dict[str, str] = data.get("custom_field_labels") or {}
 
         columns = []
