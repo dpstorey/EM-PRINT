@@ -170,10 +170,19 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
             "Lists the columns a report module can include via its `columns` param "
             "(key + display label), and which columns are used when `columns` is "
             "omitted. Not every module supports column selection -- if it doesn't, "
-            "`columns` and `default_columns` come back null."
+            "`columns` and `default_columns` come back null.\n\n"
+            "Pass `site_uuid` or `site_name` for a module whose columns depend on "
+            "live per-ICP configuration (e.g. asset_inventory's custom-field slots, "
+            "which show their operator-configured label like 'Plant ID' once the "
+            "ICP is known) -- otherwise those columns fall back to a generic label "
+            "like 'Custom Field 3'. Omit both on a single-ICP EM; it auto-resolves."
         ),
     )
-    async def list_available_columns(module: str) -> dict[str, Any]:
+    async def list_available_columns(
+        module: str,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+    ) -> dict[str, Any]:
         instance = load_module(module)
         list_columns = getattr(instance, "list_columns", None)
         default_columns = getattr(instance, "default_columns", None)
@@ -184,9 +193,10 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
                 "default_columns": None,
                 "note": "This module does not support column selection.",
             }
+        columns = await list_columns(client, site_uuid=site_uuid, site_name=site_name)
         return {
             "module": module,
-            "columns": list_columns(),
+            "columns": columns,
             "default_columns": default_columns() if default_columns else None,
         }
 

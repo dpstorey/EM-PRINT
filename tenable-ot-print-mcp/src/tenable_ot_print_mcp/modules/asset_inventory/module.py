@@ -30,6 +30,7 @@ dynamically assembling GraphQL query text per request.
 from __future__ import annotations
 
 import ipaddress
+import time
 from datetime import UTC, datetime
 from typing import Any, Callable
 
@@ -144,6 +145,67 @@ query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $searc
   }
 }
 """
+
+# Custom-field slot -> operator-configured label, resolved live
+# (2026-08-25, per Dom's explicit ask: "I'd like to use their names,
+# not customfield1 etc."). Mirrors EM-MCP's real
+# `CustomFieldLabelCache` (tools/assets.py) exactly -- same query,
+# same TTL, same icp-scoped cache key -- rather than inventing a
+# different caching scheme for the same underlying Tenable feature.
+# Labels are used for *display* only (report column headers, and
+# `list_available_columns`'s reported label) -- `columns` selection
+# still uses the stable `custom_field_1`.."custom_field_10"` keys, on
+# purpose: those never change even if an operator renames a slot's
+# label later, so a saved report request never silently breaks.
+_QUERY_CUSTOM_FIELDS = "query Q { customFields { fieldId userDefinedName valueType } }"
+
+
+class _CustomFieldLabelCache:
+    """Module-level {slot -> label} cache, scoped per ICP.
+
+    No lock -- a duplicate cold-cache fetch from concurrent report
+    jobs is harmless (both just do the same read).
+    """
+
+    _TTL_SECONDS = 60.0
+    _slot_to_label: dict[str, str] | None = None
+    _cache_scope: str | None = None
+    _ts: float = 0.0
+
+    @classmethod
+    async def get_or_fetch(cls, client: TenableClient, icp_machine_id: str | None) -> dict[str, str]:
+        cache_scope = (icp_machine_id or "").strip("/")
+        now = time.monotonic()
+        if (
+            cls._slot_to_label is not None
+            and cls._cache_scope == cache_scope
+            and (now - cls._ts) < cls._TTL_SECONDS
+        ):
+            return cls._slot_to_label
+        data = await client.query(_QUERY_CUSTOM_FIELDS, icp_machine_id=icp_machine_id)
+        slot_to_label: dict[str, str] = {}
+        for entry in data.get("customFields") or []:
+            slot = entry.get("fieldId")
+            label = entry.get("userDefinedName")
+            if slot and label:
+                slot_to_label[slot] = label
+        cls._slot_to_label = slot_to_label
+        cls._cache_scope = cache_scope
+        cls._ts = now
+        return slot_to_label
+
+
+def _custom_field_slot(column_key: str) -> str | None:
+    """`"custom_field_3"` -> `"customField3"`, or None if not one of these keys."""
+    prefix = "custom_field_"
+    if not column_key.startswith(prefix):
+        return None
+    return "customField" + column_key[len(prefix) :]
+
+
+# Tenable's AssetExpressionsParams op vocabulary (see EM-MCP's
+# tools/_enums.py) -- only the two ops this module needs.
+_EXPR_IN = "In"
 
 # Tenable's AssetExpressionsParams op vocabulary (see EM-MCP's
 # tools/_enums.py) -- only the two ops this module needs.
@@ -530,19 +592,56 @@ class AssetInventoryModule(_base.ReportModule):
             if len(nodes) >= _SAFETY_MAX_ASSETS:
                 break
 
+        # Custom-field slot labels ("Plant ID" etc., configured by the
+        # operator in Tenable) are resolved live and cached per-ICP --
+        # fetched here (fetch_data is where client/network access
+        # happens) and carried through in the returned data so
+        # to_markdown_context (pure formatting, no client) can use them
+        # as display labels without a second network round trip.
+        custom_field_labels = await _CustomFieldLabelCache.get_or_fetch(client, icp_machine_id)
+
         return {
             "total_count": total_count,
             "nodes": nodes if limit is None else nodes[:limit],
+            "custom_field_labels": custom_field_labels,
         }
 
-    def list_columns(self) -> list[dict[str, str]]:
+    async def list_columns(
+        self,
+        client: TenableClient | None = None,
+        site_uuid: str | None = None,
+        site_name: str | None = None,
+    ) -> list[dict[str, str]]:
         """Every column this module can project via `columns`, in
         registry order -- not part of the ReportModule ABC (only this
         module supports column selection so far); the MCP-side
         `list_available_columns` tool checks for this method with
         `getattr(..., None)` rather than requiring every module to
-        implement it."""
-        return [{"key": key, "label": label} for key, (label, _getter) in _COLUMN_REGISTRY.items()]
+        implement it.
+
+        When `client` is given, resolves live custom-field labels
+        ("Plant ID" instead of "Custom Field 3") the same way a real
+        report would, so discovery matches what the report will
+        actually show. Falls back to the generic "Custom Field N"
+        labels if resolution fails for any reason (e.g. no `client`,
+        or an ambiguous multi-ICP EM with no `site_uuid`/`site_name`
+        given) -- this is a discovery/listing call, so it degrades
+        gracefully rather than erroring.
+        """
+        labels = {key: label for key, (label, _getter) in _COLUMN_REGISTRY.items()}
+        if client is not None:
+            try:
+                icp_machine_id = await self._resolve_icp_machine_id(
+                    client, {"site_uuid": site_uuid, "site_name": site_name}
+                )
+                field_labels = await _CustomFieldLabelCache.get_or_fetch(client, icp_machine_id)
+                for key in labels:
+                    slot = _custom_field_slot(key)
+                    if slot and field_labels.get(slot):
+                        labels[key] = field_labels[slot]
+            except Exception:
+                pass  # nothing resolvable right now -- generic labels are still useful
+        return [{"key": key, "label": labels[key]} for key in _COLUMN_REGISTRY]
 
     def default_columns(self) -> list[str]:
         """Columns used when `columns` is omitted -- see `list_available_columns`."""
@@ -550,7 +649,23 @@ class AssetInventoryModule(_base.ReportModule):
 
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         column_keys: list[str] = params["columns"]
-        columns = [{"key": key, "label": _COLUMN_REGISTRY[key][0]} for key in column_keys]
+        custom_field_labels: dict[str, str] = data.get("custom_field_labels") or {}
+
+        columns = []
+        for key in column_keys:
+            label = _COLUMN_REGISTRY[key][0]
+            slot = _custom_field_slot(key)
+            if slot and custom_field_labels.get(slot):
+                label = custom_field_labels[slot]
+            # Registry labels are hardcoded and never contain "|" or a
+            # newline, so this is a no-op for them -- but a resolved
+            # custom-field label is operator-typed free text (like
+            # `description`, §0.10) and just as capable of containing
+            # either. Found live: an operator-configured label with a
+            # "|" in it corrupted the header row exactly the way an
+            # unescaped data cell would have. Same _render_cell() pass,
+            # applied to the header this time.
+            columns.append({"key": key, "label": _render_cell(label)})
 
         assets = []
         for node in data.get("nodes") or []:
