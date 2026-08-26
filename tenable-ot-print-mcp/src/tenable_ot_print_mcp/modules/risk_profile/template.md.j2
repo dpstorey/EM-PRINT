@@ -1,4 +1,4 @@
-_Vulnerabilities: {{ vuln_returned_count }} of {{ vuln_total_count }} shown &middot; Events: {{ event_returned_count }} of {{ event_total_count }} shown &middot; Communication peers: {{ peer_returned_count }} of {{ peer_total_count }} shown._
+_Vulnerability findings: {{ vuln_returned_count }} of {{ vuln_total_count }} shown &middot; Policy violation findings: {{ policy_finding_returned_count }} of {{ policy_finding_total_count }} shown &middot; Communication peers: {{ peer_returned_count }} of {{ peer_total_count }} shown._
 
 ## Asset
 
@@ -37,7 +37,7 @@ _Vulnerabilities: {{ vuln_returned_count }} of {{ vuln_total_count }} shown &mid
 _No risk grades supplied for this report._
 {% endif %}
 
-## Vulnerabilities
+## Vulnerability Findings (ranked by VPR)
 
 {% if vulnerabilities %}
 | Plugin | Severity | VPR Score | VPR Level | CVSS3 | CVEs | Exploit Available | KEV |
@@ -45,24 +45,24 @@ _No risk grades supplied for this report._
 {% for v in vulnerabilities %}| {{ v.plugin_name }} | {{ v.severity }} | {{ v.vpr_score }} | {{ v.vpr_level }} | {{ v.cvss3_score }} | {{ v.cves }} | {{ "Yes" if v.exploit_available else "No" }} | {{ "Yes" if v.kev else "No" }} |
 {% endfor %}
 {% else %}
-_No vulnerabilities returned for this asset._
+_No vulnerability findings returned for this asset._
 {% endif %}
 
-## Recent Events
+## Policy Violation Findings (ranked by severity)
 
-{% if events %}
-| Time | Type | Severity | Src IP | Dst IP | Protocol | Port | Policy | Resolved |
-|---|---|---|---|---|---|---:|---|:---:|
-{% for e in events %}| {{ e.time }} | {{ e.type }} | {{ e.severity }} | {{ e.src_ip }} | {{ e.dst_ip }} | {{ e.protocol }} | {{ e.port }} | {{ e.policy_title }} | {{ "Yes" if e.resolved else "No" }} |
+{% if policy_findings %}
+| Severity | Status | Policy | Plugin | Src | Dst | Protocols | MITRE Techniques | First Hit | Last Hit | Active Hits | Resolved Hits |
+|---|---|---|---|---|---|---|---|---|---|---:|---:|
+{% for f in policy_findings %}| {{ f.severity }} | {{ f.status }} | {{ f.policy_title }} | {{ f.plugin_name }} | {{ f.src_names }} | {{ f.dst_names }} | {{ f.protocols }} | {{ f.mitre_techniques }} | {{ f.first_hit_time }} | {{ f.last_hit_time }} | {{ f.active_hits }} | {{ f.resolved_hits }} |
 {% endfor %}
 {% else %}
-_No events returned for this asset._
+_No policy violation findings returned for this asset._
 {% endif %}
 
 ## Communication Peers (1-Hop Attack-Pathway Neighborhood)
 
 {% if peers %}
-| Name/IP | Protocols | Industrial Protocols | Traffic | Conversations | Last Seen |
+| Peer | Protocols | Industrial Protocols | Traffic | Conversations | Last Seen |
 |---|---|---|---:|---:|---|
 {% for p in peers %}| {{ p.peer_display }} | {{ p.protocols }} | {{ p.industrial_protocols }} | {{ p.traffic }} | {{ p.conversation_count }} | {{ p.last_conversation }} |
 {% endfor %}

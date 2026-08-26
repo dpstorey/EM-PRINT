@@ -1,12 +1,22 @@
 name: risk_profile
 title: Asset Risk Profile
 description: >
-  A single-asset risk-profile dossier: asset identity, vulnerabilities,
-  recent events, and a 1-hop communication/attack-pathway neighborhood,
+  A single-asset risk-profile dossier: asset identity, vulnerability
+  findings (ranked by VPR), policy violation findings (ranked by
+  severity), and a 1-hop communication/attack-pathway neighborhood,
   fetched live from a paired ICP, plus a risk-grade table. Replaces the
   ad hoc LLM-authored HTML report workflow previously used for this --
   same deterministic module+render+theme pipeline every other report in
   this project uses.
+
+  Policy violation findings are scoped to this one asset via a
+  name-substring match on either side of the traffic (`srcNames
+  Contains <asset name>` OR `dstNames Contains <asset name>`) --
+  Tenable's `policyFindings` type has no id-based per-asset filter.
+  This can, in principle, also match another asset whose name contains
+  this one's name as a substring, or miss a finding recorded under a
+  name this asset has since been renamed from. The findings table's
+  Src/Dst columns show which side(s) matched for each row.
 
   Risk grades are NOT computed by this module -- there is no rubric
   hardcoded here (RAISE or otherwise). A grade for each dimension can
@@ -43,21 +53,21 @@ params:
     required: false
     default: null
     description: "Optional minimum plugin severity filter: info|low|medium|high|critical."
-  - name: event_limit
+  - name: policy_finding_limit
     type: integer
     required: false
     default: 20
-    description: "Maximum recent events to include (max 500), most-recent first."
-  - name: event_since
+    description: "Maximum policy violation findings to include (max 500), ranked by severity then most-recent hit."
+  - name: policy_status
+    type: string_or_array
+    required: false
+    default: null
+    description: "Optional filter on finding status: one of active|resolved|resurfaced, several, or a comma-separated string. Omit to include all statuses."
+  - name: policy_since
     type: string
     required: false
     default: null
-    description: "Optional ISO-8601 timestamp; only events at or after this time. Omitting it returns the most recent event_limit events regardless of time -- no time window is invented if you don't ask for one."
-  - name: event_resolved
-    type: boolean
-    required: false
-    default: null
-    description: "Optional filter on event resolved-state. Omit to include both resolved and unresolved."
+    description: "Optional ISO-8601 timestamp; only findings last hit at or after this time. Omitting it returns the top policy_finding_limit findings by severity regardless of time -- no time window is invented if you don't ask for one."
   - name: peer_limit
     type: integer
     required: false
@@ -129,6 +139,6 @@ params:
       Optional freeform data-limitation lines (also accepts a single
       string) -- e.g. a partial site, an unavailable data source. This
       module auto-appends its own truncation disclosures (e.g.
-      "Vulnerabilities: showing 100 of 340 total.") on top of whatever
-      you supply here, so you don't need to restate those.
+      "Vulnerability findings: showing 100 of 340 total.") on top of
+      whatever you supply here, so you don't need to restate those.
 output_formats: [markdown, html]

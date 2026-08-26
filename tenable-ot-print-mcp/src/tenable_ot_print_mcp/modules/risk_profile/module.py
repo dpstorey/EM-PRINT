@@ -16,9 +16,10 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
 
 1. This is a synthesis report, not one GraphQL list rendered as a table.
    It stitches together `asset(id)` core fields, `asset(id).plugins`
-   (vulnerabilities), `asset(id).events`, and `links` (1-hop comms/
-   attack-pathway neighborhood) -- four separate queries against one
-   asset, mirroring EM-MCP's own `get_asset_intelligence` bundle
+   (vulnerability findings), `policyFindings` (policy violation
+   findings, see point 6), and `links` (1-hop comms/attack-pathway
+   neighborhood) -- four separate queries against/about one asset,
+   mirroring EM-MCP's own `get_asset_intelligence` bundle
    (tools/correlation.py) plus `get_communication_paths`
    (tools/topology.py), which already join exactly this data server-side
    for the same reason. Field selections below are copied from those
@@ -79,7 +80,7 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
 
 4. Communication peers are enriched with the peer asset's own name/IPs
    (2026-08-26 revision, per Dom's review of the first report: the
-   "Name/IP" column needs actual identity, not a bare id the caller has
+   "Peer" column needs actual identity, not a bare id the caller has
    to separately look up). `_QUERY_ASSET_LINKS` only returns
    `asset1`/`asset2` as scalar ids (confirmed -- neither EM-MCP's
    topology.py nor this module's own `_LINK_FIELDS` selects a nested
@@ -95,6 +96,97 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
    an assumption as GraphQL filtering gets (id-list filtering is
    close to universal), but flag it and verify against a live EM/ICP
    before relying on it, same as `_QUERY_ASSET_VULNS` above.
+
+   `_project_peer`'s display fallback (also 2026-08-26, same review
+   round): name first; if no name but IPs exist, show the bare id
+   alongside them (an id next to real IPs still has some anchoring
+   value); if neither name nor IPs exist, fall back to the peer's MAC
+   address(es) rather than a meaningless bare id; only fall all the way
+   back to the id when the peer asset has none of name/IP/MAC.
+
+5. Vulnerability findings are sorted by VPR score, highest first
+   (2026-08-26, per Dom). Done client-side on the already-fetched page
+   in Python, not via a GraphQL `sort` argument on `asset(id).plugins`
+   -- unlike the top-level `findings` query the separate
+   `vulnerability_findings` module queries (which does have a
+   schema-confirmed `sort`), no sort argument on this nested `plugins`
+   traversal has ever been confirmed in this project or in EM-MCP's own
+   correlation.py, so sorting in Python avoids adding an unverified
+   GraphQL assumption for a purely cosmetic ordering.
+
+6. "Recent Events" was replaced with "Policy Violation Findings"
+   (2026-08-26, per Dom, who asked directly whether a real
+   asset-scoped `policyFindings` query existed). It does: Dom supplied
+   a real browser network capture of Tenable OT's own UI querying
+   `policyFindings(filter, search, sort, after, first)` scoped to one
+   asset via `{"field": "srcNames", "op": "Contains", "values":
+   ["attacker-pi"]}` -- a name-substring match against the finding's
+   source-asset names, not an id filter. This is now the strongest kind
+   of evidence this project uses (a live capture, same tier as the
+   `assets` multi-key sort and `findingId`/`pluginVprScore` sort-field
+   discoveries in design-notes.md §0.17/§0.19) and it directly
+   contradicts the narrower picture from EM-MCP's own tool code alone
+   (`tools/policies.py`'s `query_policy_findings` only exposes
+   `policyId`/`severity`/`status`/`mitreTechniques`/`pluginId`/
+   `lastHitTime` as filters, no `srcNames`, and has no `asset_id`
+   param at all) -- the same recurring lesson this project keeps
+   relearning: a production tool's own surface underclaims what its
+   schema actually supports. `_QUERY_POLICY_FINDINGS` below reuses the
+   capture's exact field selection (the `policyFinding` fragment, a
+   rich set of real fields) and its exact multi-key sort
+   (`severity`/`lastHitTime`/`id`, all `DescNullLast`/`DescNullLast`/
+   `AscNullLast`).
+
+   **`dstNames` confirmed and wired in (2026-08-26, second capture).**
+   The first capture only proved `srcNames`; this module flagged
+   `dstNames` as an unconfirmed sibling per §0.12's "don't guess a
+   GraphQL field" lesson. Dom then supplied a second real capture --
+   `policyFindings` filtered by `{"op": "And", "expressions":
+   [{"field": "status", "op": "In", "values": ["Active",
+   "Resurfaced"]}, {"field": "dstNames", "op": "Contains", "values":
+   ["attacker-pi"]}]}` -- proving `dstNames Contains` is a real,
+   independently-usable filter field, not a guess. The scoping filter
+   below is now `Or(srcNames Contains <name>, dstNames Contains
+   <name>)`, ANDed with `status`/`policy_since` when supplied (same
+   `And`/`Or` composition Dom's own capture uses, just with the two
+   name-fields under the Or instead of one name-field ANDed with
+   status) -- so a report now surfaces policy violation findings where
+   this asset was either the source or the destination of the flagged
+   traffic, not source-only as before. The second capture's sort
+   (`severity`/`lastHitTime`/`id`) is identical to the first capture's
+   and to `_POLICY_FINDING_SORT` already in use here -- no change
+   needed there. It also uses `slowCount: true` on the `policyFindings`
+   call (for an exact rather than approximate `totalCount`), now added
+   here too since this module's own truncation disclosure depends on
+   an accurate total.
+
+   Still a name-substring match, not an id-exact match, on both sides
+   now -- an asset renamed since a finding was last hit, or another
+   asset whose name happens to contain this one's name as a substring,
+   remain real (if probably rare) edge cases on either the src or dst
+   side.
+
+   The second capture's richer field selection (`mitreTactics`,
+   `srcIps`/`srcMacs`/`dstIps`/`dstMacs`, `eventType { type category
+   exclusion actions canCapture }`, `assetsTypes`/`assetsCriticalities`/
+   `assetsVendors`/`assetsFamilies`/`assetsModels`/`assetsPurdueLevels`/
+   `assetsLocations`, `resolvedUser`/`resolvedOn`, `lastHitId`, and
+   `type`/`vendor` on `srcAssets`/`dstAssets` nodes) is now confirmed
+   live but deliberately not all pulled into `_POLICY_FINDING_FIELDS`
+   below -- none of it is needed to fix the one limitation this round
+   targeted (dst-side scoping), and adding unused columns just to prove
+   a point isn't this module's job. Worth a follow-up if Dom wants any
+   of it surfaced (e.g. `resolvedOn`/`resolvedUser` for resolved
+   findings, or the asset-level `type`/`vendor`/`criticality` rollups
+   for a multi-asset finding).
+
+   The table now shows which side of the traffic this asset matched on
+   (`src_names`/`dst_names`, both already projected by
+   `_project_policy_finding` but previously unused by the template) --
+   worth surfacing now that a finding can appear here purely because
+   this asset was the *destination*, not the source, of the flagged
+   traffic; showing only "Policy"/"Plugin" without that distinction
+   would leave a reader guessing which role this asset played.
 """
 
 from __future__ import annotations
@@ -188,38 +280,57 @@ _QUERY_ASSET_VULNS = (
     "}"
 )
 
-_EVENT_FIELDS = """
+# Confirmed via two of Dom's own real browser network captures of
+# Tenable OT's UI (2026-08-26, see module docstring point 6) -- field
+# selection is the first capture's exact `policyFinding` fragment
+# (trimmed to the subset useful for a single-asset table; every field
+# kept below was in the real capture, none guessed), and the sort is
+# both captures' identical multi-key sort. `Or(srcNames Contains
+# <name>, dstNames Contains <name>)` (srcNames from the first capture,
+# dstNames confirmed by the second) is how this module scopes an
+# otherwise asset-agnostic query to one asset, on either side of the
+# traffic.
+_POLICY_FINDING_FIELDS = """
   id
-  time
+  status
   severity
-  eventType { type group description category family }
-  type
-  srcIP
-  dstIP
-  protocolNiceName
-  protocol
-  port
+  policy { id title }
+  pluginName
+  mitreTechniques
   srcAssets(first: 5) { nodes { id name } }
   dstAssets(first: 5) { nodes { id name } }
-  policy { id title level }
-  resolved
-  resolvedTs
+  protocols
+  firstHitTime
+  lastHitTime
+  activeHits
+  resolvedHits
+  comment
 """
 
-# Per-asset events must traverse asset(id).events (the top-level `events`
-# filter doesn't include srcAssets/dstAssets) -- same note as EM-MCP's
-# correlation.py._QUERY_EVENTS_FOR_ASSET, copied here for the same reason.
-_QUERY_ASSET_EVENTS = (
-    "query Q($id: ID!, $pageSize: Int!, $filter: EventsExpressionsParams, "
-    "$sort: [EventsSortParams!]) {"
-    "  asset(id: $id) {"
-    "    events(first: $pageSize, filter: $filter, sort: $sort) {"
-    "      totalCount"
-    "      nodes { " + _EVENT_FIELDS + " }"
-    "    }"
+# `slowCount: true` (also confirmed by the second capture) asks for an
+# exact rather than approximate `totalCount` -- this module's own
+# truncation disclosure ("showing N of M total") depends on that count
+# being right, so it's worth the extra query cost the real UI already
+# pays.
+_QUERY_POLICY_FINDINGS = (
+    "query Q($pageSize: Int!, $filter: PolicyFindingsExpressionsParams, "
+    "$sort: [PolicyFindingsSortParams!]!) {"
+    "  policyFindings(first: $pageSize, filter: $filter, sort: $sort, slowCount: true) {"
+    "    totalCount"
+    "    nodes { " + _POLICY_FINDING_FIELDS + " }"
     "  }"
     "}"
 )
+
+# The capture's exact multi-key sort (severity, then most-recent hit,
+# then id as a stable tiebreaker) -- ranked by severity, per Dom.
+_POLICY_FINDING_SORT = [
+    {"field": "severity", "direction": "DescNullLast"},
+    {"field": "lastHitTime", "direction": "DescNullLast"},
+    {"field": "id", "direction": "AscNullLast"},
+]
+
+_POLICY_STATUS_ENUM = {"active": "Active", "resolved": "Resolved", "resurfaced": "Resurfaced"}
 
 _LINK_FIELDS = """
   id
@@ -251,6 +362,7 @@ _PEER_ASSET_FIELDS = """
   id
   name
   ips(first: 5) { nodes }
+  macs(first: 5) { nodes }
 """
 
 _QUERY_PEER_ASSETS = (
@@ -317,7 +429,7 @@ _SEVERITY_ENUM = {
 }
 
 _DEFAULT_VULN_LIMIT = 100
-_DEFAULT_EVENT_LIMIT = 20
+_DEFAULT_POLICY_FINDING_LIMIT = 20
 _DEFAULT_PEER_LIMIT = 50
 _MAX_LIMIT = 500
 
@@ -395,24 +507,27 @@ def _project_vuln(node: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _project_event(node: dict[str, Any]) -> dict[str, Any]:
-    event_type = node.get("eventType") or {}
+def _project_policy_finding(node: dict[str, Any]) -> dict[str, Any]:
     policy = node.get("policy") or {}
     src_assets = _unwrap_nodes(node.get("srcAssets"))
     dst_assets = _unwrap_nodes(node.get("dstAssets"))
+    mitre = node.get("mitreTechniques") or []
+    protocols = node.get("protocols") or []
     return {
         "id": node.get("id"),
-        "time": node.get("time"),
-        "type": event_type.get("type") or node.get("type"),
+        "status": node.get("status"),
         "severity": node.get("severity"),
-        "src_ip": node.get("srcIP"),
-        "dst_ip": node.get("dstIP"),
-        "protocol": node.get("protocolNiceName") or node.get("protocol"),
-        "port": node.get("port"),
-        "policy_title": _render_cell((policy or {}).get("title")),
-        "resolved": node.get("resolved"),
+        "policy_title": _render_cell(policy.get("title")),
+        "plugin_name": _render_cell(node.get("pluginName")),
+        "mitre_techniques": ", ".join(mitre) if isinstance(mitre, list) else "",
         "src_names": ", ".join(a.get("name") or a.get("id") or "" for a in src_assets),
         "dst_names": ", ".join(a.get("name") or a.get("id") or "" for a in dst_assets),
+        "protocols": ", ".join(protocols) if isinstance(protocols, list) else "",
+        "first_hit_time": node.get("firstHitTime"),
+        "last_hit_time": node.get("lastHitTime"),
+        "active_hits": node.get("activeHits"),
+        "resolved_hits": node.get("resolvedHits"),
+        "comment": _render_cell(node.get("comment")),
     }
 
 
@@ -424,9 +539,22 @@ def _project_peer(
     peer_id = a2 if a1 == self_id else a1
     protos = _unwrap_nodes(link.get("protocols"))
     peer_info = (peer_assets or {}).get(peer_id) or {}
-    peer_name = peer_info.get("name") or peer_id
+    peer_name = peer_info.get("name")
     peer_ips = _unwrap_nodes(peer_info.get("ips"))
-    peer_display = f"{peer_name} ({', '.join(peer_ips)})" if peer_ips else (peer_name or "")
+    peer_macs = _unwrap_nodes(peer_info.get("macs"))
+    # Identity fallback chain, per Dom (2026-08-26): name > id, and when
+    # there's neither a name nor an IP to show, a MAC address is a more
+    # useful identifier than the bare asset id -- only fall all the way
+    # back to the id when the peer asset has none of the three.
+    if peer_name:
+        base = peer_name
+    elif peer_ips:
+        base = peer_id
+    elif peer_macs:
+        base = ", ".join(peer_macs)
+    else:
+        base = peer_id
+    peer_display = f"{base} ({', '.join(peer_ips)})" if peer_ips else base
     return {
         "peer_asset_id": peer_id,
         "peer_display": _render_cell(peer_display),
@@ -483,6 +611,31 @@ def _validate_risk_grades(value: Any) -> dict[str, str]:
     return grades
 
 
+def _normalize_policy_status(value: Any) -> list[str] | None:
+    """`policy_status` -- one value, several, or a comma-separated
+    string, always building an `In` filter. Same multi-value pattern
+    `vulnerability_findings`/`policy_findings` already use for their
+    own `status` param (design-notes.md §0.18/§0.20), against the same
+    3-value `FindingStatus` enum (active/resolved/resurfaced)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw = [v.strip() for v in value.split(",") if v.strip()]
+    elif isinstance(value, (list, tuple)):
+        raw = [str(v).strip() for v in value if str(v).strip()]
+    else:
+        raise ValueError(f"policy_status must be a string or list of strings, got {value!r}")
+    if not raw:
+        return None
+    values: list[str] = []
+    for v in raw:
+        key = v.lower()
+        if key not in _POLICY_STATUS_ENUM:
+            raise ValueError(f"policy_status value {v!r} must be one of {sorted(_POLICY_STATUS_ENUM)}.")
+        values.append(_POLICY_STATUS_ENUM[key])
+    return values
+
+
 def _validate_str_map(value: Any, *, field: str) -> dict[str, str]:
     if value is None:
         return {}
@@ -524,9 +677,9 @@ class RiskProfileModule(_base.ReportModule):
             "site_name",
             "vuln_limit",
             "vuln_severity_at_least",
-            "event_limit",
-            "event_since",
-            "event_resolved",
+            "policy_finding_limit",
+            "policy_status",
+            "policy_since",
             "peer_limit",
             "peer_since",
             "risk_model",
@@ -555,9 +708,7 @@ class RiskProfileModule(_base.ReportModule):
         if vuln_severity_at_least is not None and vuln_severity_at_least not in _SEVERITY_ORDINAL:
             raise ValueError(f"vuln_severity_at_least must be one of {_SEVERITY_ORDINAL}, got {vuln_severity_at_least!r}")
 
-        event_resolved = params.get("event_resolved")
-        if event_resolved is not None and not isinstance(event_resolved, bool):
-            raise ValueError(f"event_resolved must be a boolean, got {event_resolved!r}")
+        policy_status = _normalize_policy_status(params.get("policy_status"))
 
         risk_model = params.get("risk_model")
         if risk_model is not None and not isinstance(risk_model, str):
@@ -569,9 +720,9 @@ class RiskProfileModule(_base.ReportModule):
             "site_name": params.get("site_name"),
             "vuln_limit": _clamp(params.get("vuln_limit"), _DEFAULT_VULN_LIMIT),
             "vuln_severity_at_least": vuln_severity_at_least,
-            "event_limit": _clamp(params.get("event_limit"), _DEFAULT_EVENT_LIMIT),
-            "event_since": params.get("event_since"),
-            "event_resolved": event_resolved,
+            "policy_finding_limit": _clamp(params.get("policy_finding_limit"), _DEFAULT_POLICY_FINDING_LIMIT),
+            "policy_status": policy_status,
+            "policy_since": params.get("policy_since"),
             "peer_limit": _clamp(params.get("peer_limit"), _DEFAULT_PEER_LIMIT),
             "peer_since": params.get("peer_since"),
             "risk_model": (risk_model or _DEFAULT_RISK_MODEL_LABEL).strip() or _DEFAULT_RISK_MODEL_LABEL,
@@ -641,27 +792,42 @@ class RiskProfileModule(_base.ReportModule):
         )
         vuln_block = (vuln_data.get("asset") or {}).get("plugins") or {}
 
-        event_filter_parts = []
-        if params.get("event_since"):
-            event_filter_parts.append({"field": "time", "op": _EXPR_GREATER_EQUAL, "values": params["event_since"]})
-        if params.get("event_resolved") is not None:
-            event_filter_parts.append({"field": "resolved", "op": _EXPR_EQUAL, "values": [params["event_resolved"]]})
-        event_filter = None
-        if len(event_filter_parts) == 1:
-            event_filter = event_filter_parts[0]
-        elif len(event_filter_parts) > 1:
-            event_filter = {"op": _EXPR_AND, "expressions": event_filter_parts}
-        event_data = await client.query(
-            _QUERY_ASSET_EVENTS,
+        # Scoped to this asset via Or(srcNames Contains <name>, dstNames
+        # Contains <name>) -- see module docstring point 6. Both fields
+        # are now confirmed by live captures (srcNames first, dstNames
+        # in a second capture), so this catches findings where the
+        # asset was either the source or the destination of the
+        # flagged traffic, not source-only as in the previous round.
+        asset_name = asset_node.get("name") or asset_id
+        name_match = {
+            "op": _EXPR_OR,
+            "expressions": [
+                {"field": "srcNames", "op": "Contains", "values": [asset_name]},
+                {"field": "dstNames", "op": "Contains", "values": [asset_name]},
+            ],
+        }
+        policy_filter_parts = [name_match]
+        if params.get("policy_status"):
+            policy_filter_parts.append({"field": "status", "op": _EXPR_IN, "values": params["policy_status"]})
+        if params.get("policy_since"):
+            policy_filter_parts.append(
+                {"field": "lastHitTime", "op": _EXPR_GREATER_EQUAL, "values": params["policy_since"]}
+            )
+        policy_filter = (
+            policy_filter_parts[0]
+            if len(policy_filter_parts) == 1
+            else {"op": _EXPR_AND, "expressions": policy_filter_parts}
+        )
+        policy_data = await client.query(
+            _QUERY_POLICY_FINDINGS,
             variables={
-                "id": asset_id,
-                "pageSize": params["event_limit"],
-                "filter": event_filter,
-                "sort": [{"field": "time", "direction": "DescNullLast"}],
+                "pageSize": params["policy_finding_limit"],
+                "filter": policy_filter,
+                "sort": _POLICY_FINDING_SORT,
             },
             icp_machine_id=icp_machine_id,
         )
-        event_block = (event_data.get("asset") or {}).get("events") or {}
+        policy_block = policy_data.get("policyFindings") or {}
 
         side_match = {
             "op": _EXPR_OR,
@@ -718,8 +884,8 @@ class RiskProfileModule(_base.ReportModule):
             "custom_field_grades": custom_field_grades,
             "vuln_nodes": vuln_block.get("nodes") or [],
             "vuln_total": vuln_block.get("totalCount") or 0,
-            "event_nodes": event_block.get("nodes") or [],
-            "event_total": event_block.get("totalCount") or 0,
+            "policy_finding_nodes": policy_block.get("nodes") or [],
+            "policy_finding_total": policy_block.get("totalCount") or 0,
             "peer_nodes": peer_nodes,
             "peer_total": peer_block.get("totalCount") or 0,
             "peer_assets": peer_assets,
@@ -729,7 +895,18 @@ class RiskProfileModule(_base.ReportModule):
         asset_id = params["asset_id"]
         asset = _project_asset(data["asset"])
         vulns = [_project_vuln(n) for n in data["vuln_nodes"]]
-        events = [_project_event(n) for n in data["event_nodes"]]
+        # Ranked by VPR, highest first -- client-side sort (2026-08-26,
+        # per Dom), not a GraphQL `sort` argument: `asset(id).plugins`
+        # has no confirmed sort argument anywhere this project or
+        # EM-MCP's own correlation.py has used, unlike the top-level
+        # `findings` query the separate vulnerability_findings module
+        # queries. Sorting the already-fetched page in Python needs no
+        # new schema assumption. Missing VPR scores sort last, not first.
+        vulns.sort(key=lambda v: (v["vpr_score"] is None, -(v["vpr_score"] or 0)))
+        # Policy violation findings already come back ranked by severity
+        # (the query's own `sort`, see `_POLICY_FINDING_SORT`) -- no
+        # client-side re-sort needed, unlike vulnerabilities above.
+        policy_findings = [_project_policy_finding(n) for n in data["policy_finding_nodes"]]
         peers = [_project_peer(n, asset_id, data.get("peer_assets")) for n in data["peer_nodes"]]
 
         # Merge order: whatever's already assigned in Tenable via custom
@@ -744,9 +921,11 @@ class RiskProfileModule(_base.ReportModule):
         # remembering to say so every time.
         auto_limitations: list[str] = []
         if len(vulns) < data["vuln_total"]:
-            auto_limitations.append(f"Vulnerabilities: showing {len(vulns)} of {data['vuln_total']} total.")
-        if len(events) < data["event_total"]:
-            auto_limitations.append(f"Events: showing {len(events)} of {data['event_total']} total.")
+            auto_limitations.append(f"Vulnerability findings: showing {len(vulns)} of {data['vuln_total']} total.")
+        if len(policy_findings) < data["policy_finding_total"]:
+            auto_limitations.append(
+                f"Policy violation findings: showing {len(policy_findings)} of {data['policy_finding_total']} total."
+            )
         if len(peers) < data["peer_total"]:
             auto_limitations.append(f"Communication peers: showing {len(peers)} of {data['peer_total']} total.")
 
@@ -761,9 +940,9 @@ class RiskProfileModule(_base.ReportModule):
             "vulnerabilities": vulns,
             "vuln_returned_count": len(vulns),
             "vuln_total_count": data["vuln_total"],
-            "events": events,
-            "event_returned_count": len(events),
-            "event_total_count": data["event_total"],
+            "policy_findings": policy_findings,
+            "policy_finding_returned_count": len(policy_findings),
+            "policy_finding_total_count": data["policy_finding_total"],
             "peers": peers,
             "peer_returned_count": len(peers),
             "peer_total_count": data["peer_total"],
