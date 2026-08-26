@@ -132,7 +132,25 @@ params:
       this table, or whose assigned grade isn't a key in that
       dimension's row, simply has no looked-up text (not an error) --
       renders a blank Detail cell unless `risk_grade_descriptions`
-      supplies one directly.
+      supplies one directly. Don't retype your whole table into every
+      call -- save it once via the `save_risk_grade_scale` tool and
+      pass `risk_grade_scale_name` instead; that resolved table is
+      merged UNDER whatever you pass here, so this param can still be
+      used for a one-off correction on top of a saved table.
+  - name: risk_grade_scale_name
+    type: string
+    required: false
+    default: null
+    description: >-
+      References a risk_grade_scale table already saved server-side
+      via the `save_risk_grade_scale` tool (call `list_risk_grade_scales`
+      to see what's saved), instead of resupplying the whole table in
+      `risk_grade_scale` every report. The saved table is the base;
+      if `risk_grade_scale` is ALSO passed this same call, its entries
+      override the saved table per (dimension, grade) -- same
+      "explicit override always wins" convention as everywhere else
+      in this module. An unknown name is rejected outright, naming
+      what is currently saved.
   - name: risk_grade_descriptions
     type: object
     required: false

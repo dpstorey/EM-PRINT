@@ -113,6 +113,46 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
    `risk_grade_scale` looked up -- same "explicit override always wins"
    merge order `risk_grades` itself already uses against custom fields.
 
+   **Stored scale tables, so the calling LLM doesn't retype one every
+   report (2026-08-26, per Dom).** Dom asked, reasonably, how a
+   calling LLM (via LibreChat) is actually supposed to "use" a
+   `risk_grade_scale` table day to day -- and pointed out the real
+   problem himself: relying on an LLM to correctly paste a 25-cell
+   reference table into every single `submit_report_job` call is
+   exactly the kind of "trust the LLM to reproduce this exactly" risk
+   this whole module exists to design around, just moved one step
+   earlier than the lookup itself. `risk_grade_scale_name` fixes that:
+   a caller saves a table *once* (`save_risk_grade_scale`, a new
+   mcp_app.py tool -- see there) to this server's own writable /data
+   mount, at `<data_dir>/risk_grade_scales/<name>.json` -- the exact
+   same "drop a file at a known path on the bind mount, no code change
+   or redeploy needed" pattern `get_ca_bundle_path` already uses for
+   the TLS CA bundle (config.py). Every later report just passes
+   `risk_grade_scale_name: "raise"` and the server resolves it from
+   disk -- no table text in that call's arguments at all.
+
+   This resolution happens in a new `resolve_stored_params` method,
+   deliberately **not** part of the `ReportModule` ABC -- called by
+   mcp_app.py via the same `getattr(instance, ..., None)` optional-hook
+   pattern already used for asset_inventory's `list_columns`/
+   `default_columns` (§0.10), so no other module is forced to support
+   it. It runs *after* `validate_params` (so `risk_grade_scale_name`
+   still gets a plain structural check there) and *before*
+   `fetch_data` -- disk I/O has no natural home in either of those
+   methods' existing contracts (`validate_params` is deliberately
+   synchronous/I-O-free; `fetch_data` is for Tenable GraphQL, not
+   local files), so this is a third, module-specific step slotted
+   between them, only for modules that define it.
+
+   Merge order, same "explicit override always wins" convention as
+   everywhere else here: the stored table is the base, and an inline
+   `risk_grade_scale` passed in *that same call* overrides it per
+   (dimension, grade) -- lets a caller use the saved table for
+   everything except a one-off correction, without touching the saved
+   file. A `risk_grade_scale_name` that doesn't match a saved file
+   raises naming the path it looked for and listing what *is* saved,
+   rather than silently falling back to nothing.
+
 3. "Attack pathways" in EM-MCP's own tools (`query_attack_pathways`) is,
    by its own docstring, just the 1-hop `links` neighborhood -- "the
    server does NOT compute paths ... that's the AI's job." So
@@ -232,8 +272,11 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
 
 from __future__ import annotations
 
+import json
+import re
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from ...tenable_client import TenableClient
@@ -723,6 +766,51 @@ def _validate_risk_grade_scale(value: Any) -> dict[str, dict[str, str]]:
     return scale
 
 
+# ----------------------------------------------------------------------
+# Stored risk_grade_scale tables, saved once to this server's own
+# writable /data mount so a calling LLM can reference one by name
+# instead of retyping a whole reference table into every report
+# request (2026-08-26, per Dom). Same bind-mount pattern config.py's
+# `get_ca_bundle_path` already uses for the TLS CA bundle: a fixed
+# subdirectory under `data_dir`, no code change or redeploy needed to
+# add/update one -- just a file written to a known path.
+
+_SCALE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _scales_dir(data_dir: Path) -> Path:
+    return data_dir / "risk_grade_scales"
+
+
+def _validate_scale_name(name: str) -> str:
+    name = str(name).strip()
+    if not name or not _SCALE_NAME_RE.match(name):
+        raise ValueError(
+            f"risk_grade_scale_name {name!r} must be non-empty and contain only "
+            "letters, digits, '-', and '_' -- it's used directly as a filename, "
+            "not a path (no '/', '..', etc.)."
+        )
+    return name
+
+
+def _load_stored_risk_grade_scale(data_dir: Path, name: str) -> dict[str, dict[str, str]]:
+    name = _validate_scale_name(name)
+    scales_dir = _scales_dir(data_dir)
+    path = scales_dir / f"{name}.json"
+    if not path.is_file():
+        available = sorted(p.stem for p in scales_dir.glob("*.json")) if scales_dir.is_dir() else []
+        raise ValueError(
+            f"No stored risk_grade_scale named {name!r} -- looked for {path}. "
+            f"Available: {available if available else '(none saved yet)'}. "
+            "Save one first with the save_risk_grade_scale tool."
+        )
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Stored risk_grade_scale {name!r} at {path} is not valid JSON: {e}") from e
+    return _validate_risk_grade_scale(raw)
+
+
 def _resolve_custom_field_slot(spec: str, label_to_slot: dict[str, str]) -> str:
     """Resolve a `risk_grade_fields` value to a `customFieldN` slot.
 
@@ -767,6 +855,7 @@ class RiskProfileModule(_base.ReportModule):
             "risk_dimension_labels",
             "risk_grade_descriptions",
             "risk_grade_scale",
+            "risk_grade_scale_name",
             "risk_scale_note",
             "analyst_assessment",
             "data_limitations",
@@ -795,6 +884,10 @@ class RiskProfileModule(_base.ReportModule):
         if risk_model is not None and not isinstance(risk_model, str):
             raise ValueError(f"risk_model must be a string, got {risk_model!r}")
 
+        risk_grade_scale_name = params.get("risk_grade_scale_name")
+        if risk_grade_scale_name is not None and not isinstance(risk_grade_scale_name, str):
+            raise ValueError(f"risk_grade_scale_name must be a string, got {risk_grade_scale_name!r}")
+
         return {
             "asset_id": asset_id,
             "site_uuid": params.get("site_uuid"),
@@ -812,10 +905,63 @@ class RiskProfileModule(_base.ReportModule):
             "risk_dimension_labels": _validate_str_map(params.get("risk_dimension_labels"), field="risk_dimension_labels"),
             "risk_grade_descriptions": _validate_str_map(params.get("risk_grade_descriptions"), field="risk_grade_descriptions"),
             "risk_grade_scale": _validate_risk_grade_scale(params.get("risk_grade_scale")),
+            "risk_grade_scale_name": risk_grade_scale_name,
             "risk_scale_note": _normalize_str_list(params.get("risk_scale_note"), field="risk_scale_note"),
             "analyst_assessment": _normalize_str_list(params.get("analyst_assessment"), field="analyst_assessment"),
             "data_limitations": _normalize_str_list(params.get("data_limitations"), field="data_limitations"),
         }
+
+    def resolve_stored_params(self, params: dict[str, Any], data_dir: Path) -> dict[str, Any]:
+        """Optional hook -- deliberately NOT part of the `ReportModule`
+        ABC, same "not every module needs this" reasoning as
+        `list_columns`/`default_columns` (§0.10). Called by
+        mcp_app.py's `submit_report_job` via `getattr(instance, ...,
+        None)`, after `validate_params` and before `fetch_data`: disk
+        I/O for a *stored* `risk_grade_scale` has no natural home in
+        either of those methods' existing contracts, so this is a
+        third step, only for modules that define it.
+
+        2026-08-26, per Dom: resolves `risk_grade_scale_name` into a
+        table saved once via `save_risk_grade_scale` (see
+        `save_stored_scale` below) at `<data_dir>/risk_grade_scales/
+        <name>.json`, so a calling LLM references a table by name
+        instead of retyping the whole thing into every report request.
+        Merge order, same "explicit override always wins" convention
+        as everywhere else in this module: the stored table is the
+        base, an inline `risk_grade_scale` passed in this same call
+        overrides it per (dimension, grade).
+        """
+        name = params.get("risk_grade_scale_name")
+        if not name:
+            return params
+        stored = _load_stored_risk_grade_scale(data_dir, name)
+        merged: dict[str, dict[str, str]] = {dim: dict(row) for dim, row in stored.items()}
+        for dim, row in params["risk_grade_scale"].items():
+            merged.setdefault(dim, {}).update(row)
+        resolved = dict(params)
+        resolved["risk_grade_scale"] = merged
+        return resolved
+
+    def save_stored_scale(self, data_dir: Path, name: str, scale: Any) -> None:
+        """Validates `scale` with the same rules `risk_grade_scale`
+        itself is validated against, then writes it to
+        `<data_dir>/risk_grade_scales/<name>.json` -- creating that
+        directory on first use. Overwrites an existing file of the
+        same name (updating a saved table is meant to be this easy;
+        there's no versioning here, same as any other config file on
+        this bind mount)."""
+        name = _validate_scale_name(name)
+        validated = _validate_risk_grade_scale(scale)
+        scales_dir = _scales_dir(data_dir)
+        scales_dir.mkdir(parents=True, exist_ok=True)
+        path = scales_dir / f"{name}.json"
+        path.write_text(json.dumps(validated, indent=2, sort_keys=True), encoding="utf-8")
+
+    def list_stored_scales(self, data_dir: Path) -> list[str]:
+        scales_dir = _scales_dir(data_dir)
+        if not scales_dir.is_dir():
+            return []
+        return sorted(p.stem for p in scales_dir.glob("*.json"))
 
     async def _resolve_icp_machine_id(self, client: TenableClient, params: dict[str, Any]) -> str:
         """Same auto-resolve pattern as every other module here

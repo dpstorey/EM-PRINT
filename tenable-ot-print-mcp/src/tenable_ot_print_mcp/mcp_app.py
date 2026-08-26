@@ -100,7 +100,16 @@ Operating principles:
    name). The rubric is entirely caller-defined: dimension codes,
    display labels (`risk_dimension_labels`), and value scale (letters,
    numbers, words) are whatever your organization's model uses --
-   nothing here assumes a specific one.
+   nothing here assumes a specific one. Each dimension's grade table
+   "Detail" text can come from `risk_grade_scale` -- a full
+   {dimension: {grade: description}} reference table (e.g. a RAISE
+   matrix), looked up automatically per dimension using that report's
+   own `risk_grades` -- or from `risk_grade_descriptions` for a
+   one-off per-dimension override. Don't retype the whole reference
+   table into every call: save it once with `save_risk_grade_scale`
+   and pass `risk_grade_scale_name` on every later report instead;
+   call `list_risk_grade_scales` to see what's already saved before
+   guessing a name or saving a duplicate.
 
 10. Themes control visual layout/branding (see point 2), and as of the
    `risk_profile` module, that now includes color/typography too, not
@@ -179,6 +188,15 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
         try:
             instance = load_module(module)
             normalized_params = instance.validate_params(params)
+            # Optional module-specific hook (getattr, same pattern as
+            # list_columns/default_columns below) -- resolves any
+            # server-stored data (e.g. risk_profile's
+            # risk_grade_scale_name) that validate_params' synchronous/
+            # I/O-free contract has no room for. Not every module
+            # defines this; most don't and this is a no-op for them.
+            resolve_stored_params = getattr(instance, "resolve_stored_params", None)
+            if resolve_stored_params is not None:
+                normalized_params = resolve_stored_params(normalized_params, data_dir)
             data = await instance.fetch_data(client, normalized_params)
             context = instance.to_markdown_context(data, normalized_params)
         except Exception as e:  # noqa: BLE001 — surfaced to the caller, then re-raised context
@@ -269,5 +287,40 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
     )
     async def list_recent_report_jobs(limit: int = 10) -> dict[str, Any]:
         return {"jobs": audit.recent(limit=limit)}
+
+    @mcp.tool(
+        title="Save a named risk-grade scale table",
+        description=(
+            "Saves a risk_grade_scale reference table (e.g. a full RAISE matrix) to "
+            "this server's own data directory under a short name, so future "
+            "risk_profile reports can pass risk_grade_scale_name instead of "
+            "resupplying the whole table every call -- saves it once, reuse forever. "
+            "Overwrites an existing table of the same name. Not every module "
+            "supports this; if the named module doesn't, this returns an error "
+            "saying so rather than silently doing nothing."
+        ),
+    )
+    async def save_risk_grade_scale(module: str, name: str, scale: dict[str, Any]) -> dict[str, Any]:
+        instance = load_module(module)
+        saver = getattr(instance, "save_stored_scale", None)
+        if saver is None:
+            raise ValueError(f"Module {module!r} does not support stored risk-grade scales.")
+        saver(data_dir, name, scale)
+        return {"module": module, "saved_as": name}
+
+    @mcp.tool(
+        title="List saved risk-grade scale tables",
+        description=(
+            "Lists the names already saved via save_risk_grade_scale for a given "
+            "module -- check this before guessing a risk_grade_scale_name, or "
+            "before saving a new one if you're not sure whether it already exists."
+        ),
+    )
+    async def list_risk_grade_scales(module: str) -> dict[str, Any]:
+        instance = load_module(module)
+        lister = getattr(instance, "list_stored_scales", None)
+        if lister is None:
+            return {"module": module, "names": None, "note": "This module does not support stored risk-grade scales."}
+        return {"module": module, "names": lister(data_dir)}
 
     return mcp.streamable_http_app()
