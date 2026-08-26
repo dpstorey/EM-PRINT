@@ -81,12 +81,14 @@ Operating principles:
    asset `policyFindings` surface -- this is also what the product's
    GUI "Compliance"/"Policy Violations" pages show, just under a
    different label). Both support `columns` the same way
-   asset_inventory does, but do NOT accept a `sort` param yet -- rows
-   always come back most-recently-hit first. That's a deliberate,
-   stated simplification (not every sortable field on these two
-   GraphQL surfaces has been confirmed against live/production
-   evidence the way asset_inventory's was), not a missing feature to
-   work around.
+   asset_inventory does. `vulnerability_findings` also accepts a
+   `sort` param, but only for 3 columns (`finding_id`, `last_hit`,
+   `vpr_score`) -- the only ones confirmed sortable against a live
+   capture; check `list_available_columns`' `sortable` flag before
+   guessing at others. `policy_findings` does not accept `sort` yet at
+   all (no live confirmation of any customizable sort field on that
+   surface beyond its own fixed default). Both fall back to
+   most-recently-hit-first when `sort` is omitted.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"
