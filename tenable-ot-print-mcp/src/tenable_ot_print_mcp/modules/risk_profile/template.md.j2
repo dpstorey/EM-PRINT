@@ -6,39 +6,36 @@ _Vulnerabilities: {{ vuln_returned_count }} of {{ vuln_total_count }} shown &mid
 |---|---|
 | Name | {{ asset.name }} |
 | Type | {{ asset.type }} ({{ asset.super_type }}) |
-| Category | {{ asset.category }} |
+| Risk | {{ "%.1f"|format(asset.total_risk) if asset.total_risk is not none else "-" }} |
 | Vendor / Model | {{ asset.vendor }} / {{ asset.model }} |
+| Description | {{ asset.description }} |
 | Firmware | {{ asset.firmware_version }} |
 | OS / Family | {{ asset.os }} / {{ asset.family }} |
 | Purdue Level | {{ asset.purdue_level }} |
 | Criticality | {{ asset.criticality }} |
-| Run Status | {{ asset.run_status }} ({{ asset.extended_run_status }}) |
+| Run State | {{ asset.run_status }} ({{ asset.extended_run_status }}) |
 | Location | {{ asset.location }} |
-| Description | {{ asset.description }} |
 | IPs | {{ asset.ips | join(", ") }} |
 | MACs | {{ asset.macs | join(", ") }} |
 | Segments | {{ asset.segments | join(", ") }} |
-| Total Risk | {{ asset.total_risk }} |
-| Plugin Count | {{ asset.plugin_count }} |
 | Unresolved Events | {{ asset.unresolved_events }} |
-| First / Last Seen | {{ asset.first_seen }} / {{ asset.last_seen }} |
+| First Seen | {{ asset.first_seen }} |
+| Last Seen | {{ asset.last_seen }} |
 | Lifecycle Status | {{ asset.lifecycle_status }} |
 
-## {{ risk_model }} Grades
+## {{ risk_model }} Risk Assessment
 
 {% if risk_grades %}
-| {% for dim in risk_grades %}{{ risk_dimension_labels.get(dim, dim) }} | {% endfor %}
-
+| {% for dim in risk_grades %}{{ (dim ~ " (" ~ risk_dimension_labels[dim] ~ ")") if dim in risk_dimension_labels else dim }} | {% endfor %}
 |{% for dim in risk_grades %} :---: |{% endfor %}
-
 | {% for dim, value in risk_grades.items() %}{{ value }} | {% endfor %}
 
-{% else %}
-_No risk grades supplied for this report._
-{% endif %}
 {% for line in risk_scale_note %}
 > {{ line }}
 {% endfor %}
+{% else %}
+_No risk grades supplied for this report._
+{% endif %}
 
 ## Vulnerabilities
 
@@ -65,15 +62,13 @@ _No events returned for this asset._
 ## Communication Peers (1-Hop Attack-Pathway Neighborhood)
 
 {% if peers %}
-| Peer Asset ID | Protocols | Industrial Protocols | Traffic | Conversations | Last Seen |
+| Name/IP | Protocols | Industrial Protocols | Traffic | Conversations | Last Seen |
 |---|---|---|---:|---:|---|
-{% for p in peers %}| {{ p.peer_asset_id }} | {{ p.protocols }} | {{ p.industrial_protocols }} | {{ p.traffic }} | {{ p.conversation_count }} | {{ p.last_conversation }} |
+{% for p in peers %}| {{ p.peer_display }} | {{ p.protocols }} | {{ p.industrial_protocols }} | {{ p.traffic }} | {{ p.conversation_count }} | {{ p.last_conversation }} |
 {% endfor %}
 {% else %}
 _No communication peers returned for this asset._
 {% endif %}
-
-Call `get_asset` on a peer's id to enrich it with name/vendor/type, or run this report against it to expand the neighborhood further -- this server does not compute multi-hop paths itself.
 
 ## Analyst Assessment
 

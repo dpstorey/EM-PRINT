@@ -46,7 +46,7 @@ params:
   - name: event_limit
     type: integer
     required: false
-    default: 50
+    default: 20
     description: "Maximum recent events to include (max 500), most-recent first."
   - name: event_since
     type: string

@@ -76,6 +76,25 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
    server does NOT compute paths ... that's the AI's job." So
    `comm_peers` below IS the attack-pathway data; there's no separate,
    more-complex graph-walk query to replicate.
+
+4. Communication peers are enriched with the peer asset's own name/IPs
+   (2026-08-26 revision, per Dom's review of the first report: the
+   "Name/IP" column needs actual identity, not a bare id the caller has
+   to separately look up). `_QUERY_ASSET_LINKS` only returns
+   `asset1`/`asset2` as scalar ids (confirmed -- neither EM-MCP's
+   topology.py nor this module's own `_LINK_FIELDS` selects a nested
+   object off them), so `fetch_data` does one batched follow-up lookup
+   -- `_QUERY_PEER_ASSETS`, filtering the *plural* `assets(...)` query
+   by `field: "id", op: In` against the distinct peer ids from the
+   links page. That reuses asset_inventory's own confirmed
+   `assets(filter: AssetExpressionsParams)` shape (see its
+   `_QUERY_ASSETS`), but filtering `assets` *by id* specifically has not
+   itself been confirmed against a schema introspection query --
+   unlike every other filter field this module uses, which were each
+   copied from an already-proven EM-MCP call site. It's about as safe
+   an assumption as GraphQL filtering gets (id-list filtering is
+   close to universal), but flag it and verify against a live EM/ICP
+   before relying on it, same as `_QUERY_ASSET_VULNS` above.
 """
 
 from __future__ import annotations
@@ -224,6 +243,24 @@ _QUERY_ASSET_LINKS = (
     "}"
 )
 
+# Batched name/IP lookup for communication peers -- see module docstring
+# point 4 for why this is a separate follow-up query (links only carry
+# the peer's bare id) and the one unverified assumption it rests on
+# (filtering `assets` by `id`).
+_PEER_ASSET_FIELDS = """
+  id
+  name
+  ips(first: 5) { nodes }
+"""
+
+_QUERY_PEER_ASSETS = (
+    "query Q($pageSize: Int!, $filter: AssetExpressionsParams) {"
+    "  assets(first: $pageSize, filter: $filter) {"
+    "    nodes { " + _PEER_ASSET_FIELDS + " }"
+    "  }"
+    "}"
+)
+
 # Custom-field slot -> operator-configured label, resolved live. Mirrors
 # asset_inventory's `_CustomFieldLabelCache` exactly (same query, same
 # TTL, same icp-scoped cache key) -- duplicated rather than shared, same
@@ -280,7 +317,7 @@ _SEVERITY_ENUM = {
 }
 
 _DEFAULT_VULN_LIMIT = 100
-_DEFAULT_EVENT_LIMIT = 50
+_DEFAULT_EVENT_LIMIT = 20
 _DEFAULT_PEER_LIMIT = 50
 _MAX_LIMIT = 500
 
@@ -379,13 +416,20 @@ def _project_event(node: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _project_peer(link: dict[str, Any], self_id: str) -> dict[str, Any]:
+def _project_peer(
+    link: dict[str, Any], self_id: str, peer_assets: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any]:
     a1 = link.get("asset1")
     a2 = link.get("asset2")
     peer_id = a2 if a1 == self_id else a1
     protos = _unwrap_nodes(link.get("protocols"))
+    peer_info = (peer_assets or {}).get(peer_id) or {}
+    peer_name = peer_info.get("name") or peer_id
+    peer_ips = _unwrap_nodes(peer_info.get("ips"))
+    peer_display = f"{peer_name} ({', '.join(peer_ips)})" if peer_ips else (peer_name or "")
     return {
         "peer_asset_id": peer_id,
+        "peer_display": _render_cell(peer_display),
         "protocols": ", ".join(p.get("name") for p in protos if p.get("name")),
         "industrial_protocols": ", ".join(p.get("name") for p in protos if p.get("ics")),
         "traffic": link.get("traffic"),
@@ -643,6 +687,31 @@ class RiskProfileModule(_base.ReportModule):
             icp_machine_id=icp_machine_id,
         )
         peer_block = peer_data.get("links") or {}
+        peer_nodes = peer_block.get("nodes") or []
+
+        # Batched name/IP lookup for whatever peers came back -- see
+        # module docstring point 4. Costs nothing extra when there are
+        # no peers (e.g. an isolated asset).
+        peer_ids = sorted(
+            {
+                (n.get("asset2") if n.get("asset1") == asset_id else n.get("asset1"))
+                for n in peer_nodes
+                if n.get("asset1") and n.get("asset2")
+            }
+        )
+        peer_assets: dict[str, dict[str, Any]] = {}
+        if peer_ids:
+            peer_asset_data = await client.query(
+                _QUERY_PEER_ASSETS,
+                variables={
+                    "pageSize": len(peer_ids),
+                    "filter": {"field": "id", "op": _EXPR_IN, "values": peer_ids},
+                },
+                icp_machine_id=icp_machine_id,
+            )
+            for n in (peer_asset_data.get("assets") or {}).get("nodes") or []:
+                if n.get("id"):
+                    peer_assets[n["id"]] = n
 
         return {
             "asset": asset_node,
@@ -651,8 +720,9 @@ class RiskProfileModule(_base.ReportModule):
             "vuln_total": vuln_block.get("totalCount") or 0,
             "event_nodes": event_block.get("nodes") or [],
             "event_total": event_block.get("totalCount") or 0,
-            "peer_nodes": peer_block.get("nodes") or [],
+            "peer_nodes": peer_nodes,
             "peer_total": peer_block.get("totalCount") or 0,
+            "peer_assets": peer_assets,
         }
 
     def to_markdown_context(self, data: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
@@ -660,7 +730,7 @@ class RiskProfileModule(_base.ReportModule):
         asset = _project_asset(data["asset"])
         vulns = [_project_vuln(n) for n in data["vuln_nodes"]]
         events = [_project_event(n) for n in data["event_nodes"]]
-        peers = [_project_peer(n, asset_id) for n in data["peer_nodes"]]
+        peers = [_project_peer(n, asset_id, data.get("peer_assets")) for n in data["peer_nodes"]]
 
         # Merge order: whatever's already assigned in Tenable via custom
         # fields first, then the caller's own `risk_grades` overrides
