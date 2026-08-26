@@ -49,7 +49,8 @@ from .. import _base
 # rather than carrying forward an unnecessary workaround.
 #
 # Field selection (§0.10, corrected against Dom's real schema paste in
-# §0.11) starts from EM-MCP's real, production `_ASSET_BASE` fragment
+# §0.11, corrected again in §0.12) starts from EM-MCP's real,
+# production `_ASSET_BASE` fragment
 # (id/name/type/superType/category/vendor/model/firmwareVersion/os/
 # family/description/location/purdueLevel/criticality/hidden/
 # runStatus/extendedRunStatus/firstSeen/lastSeen/lastUpdate/
@@ -58,8 +59,9 @@ from .. import _base
 # scalar/StringConnection field Dom's own GraphQL schema paste (§0.11)
 # confirms actually exists on the Asset type: `serial`, `slot`,
 # `backplane { name size }`, `osDetails { name architecture version }`,
-# `runStatusTime`, `attackVector`, `hardwareState`, `discontinuedDate`,
+# `runStatusTime`, `hardwareState`, `discontinuedDate`,
 # `replacementProduct`, `lastHit`, `lastSnapshot`, `subnets`, `tags`.
+#
 # Deliberately NOT selected despite existing on the schema: `sources`
 # (a `LeanSourceConnection` whose node shape isn't confirmed -- adding
 # it blind risks breaking every report if the guessed sub-field name
@@ -72,6 +74,19 @@ from .. import _base
 # `ips`/`macs` raised to `first: 50` (from the earlier `first: 5`) to
 # match EM-MCP's real fragment -- incidentally closes the "an asset
 # with >5 NICs gets truncated" gap flagged in design-notes.md §4.
+#
+# `attackVector` was here too, briefly (§0.11) -- REMOVED in §0.12
+# after a live test showed it's an object type requiring subfield
+# selection ("Field 'attackVector' of type 'AttackVector' must have a
+# selection of subfields"), not the leaf scalar pyTenable's marshmallow
+# schema (`fields.String(data_key="attackVector")`) implied. Because
+# this query fetches the same field superset on EVERY request
+# regardless of which `columns` were asked for, that one bad field
+# broke 100% of asset_inventory reports -- including default-columns
+# ones that never mentioned attack_vector at all. Re-add only once its
+# real subfields are known (needs schema introspection or another
+# schema paste); don't guess at a subfield selection the way the bare
+# field name itself was guessed.
 _QUERY_ASSETS = """
 query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $search: String) {
   assets(first: $pageSize, after: $after, filter: $filter, search: $search) {
@@ -114,7 +129,6 @@ query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $searc
       subnets(first: 50) { nodes }
       tags(first: 50) { nodes }
       segments(first: 50) { nodes { name } }
-      attackVector
       risk { totalRisk pluginCount unresolvedEvents }
       customField1
       customField2
@@ -259,7 +273,6 @@ _COLUMN_REGISTRY: dict[str, tuple[str, Callable[[dict[str, Any]], Any]]] = {
     "subnets": ("Subnets", lambda n: _join_nodes(n.get("subnets"))),
     "tags": ("Tags", lambda n: _join_nodes(n.get("tags"))),
     "segments": ("Segments", lambda n: _join_segment_names(n.get("segments"))),
-    "attack_vector": ("Attack Vector", lambda n: n.get("attackVector")),
     "total_risk": ("Risk", lambda n: _fmt_risk((n.get("risk") or {}).get("totalRisk"))),
     "plugin_count": ("Plugin Count", lambda n: (n.get("risk") or {}).get("pluginCount")),
     "unresolved_events": ("Unresolved Events", lambda n: (n.get("risk") or {}).get("unresolvedEvents")),
