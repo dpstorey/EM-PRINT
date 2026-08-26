@@ -1,7 +1,7 @@
 name: asset_inventory
 title: Asset Inventory
 description: >
-  Lists OT assets from a paired ICP behind the configured Tenable OT /
+  Lists OT assets from a paired ICP behind the configured Tenable One OT Exposure /
   Enterprise Manager connection. Every asset field this module knows
   how to project (identity, classification, network, lifecycle, risk,
   and the 10 custom-field slots) is available via the `columns` param;
@@ -59,8 +59,27 @@ params:
       than silently dropped. A custom-field slot can be given either
       by its stable key (custom_field_1..custom_field_10) or by its
       live operator-configured name (e.g. "Owner") exactly as Tenable
-      OT's own UI shows it -- that UI never shows the stable key.
-      Omitting `columns` uses that default set (the original 9-column
-      report: name, vendor, model, firmware_version, criticality, ip,
-      last_seen, total_risk, unresolved_events).
+      One OT Exposure's own UI shows it -- that UI never shows the
+      stable key. Omitting `columns` uses that default set (the
+      original 9-column report: name, vendor, model, firmware_version,
+      criticality, ip, last_seen, total_risk, unresolved_events).
+  - name: sort
+    type: array
+    required: false
+    default: null
+    description: >-
+      Optional list of column selectors to sort rows by, in priority
+      order (also accepts a comma-separated string). Prefix a
+      selector with "-" for descending; ascending is the default.
+      E.g. `["-total_risk", "name"]` sorts by risk descending, then by
+      name ascending as a tiebreaker. Uses the same column-name
+      language as `columns` (stable key or a custom field's live
+      name), but only a subset of columns are sortable -- fields
+      computed from a nested object (like total_risk, plugin_count,
+      unresolved_events, os_version, os_architecture, backplane_name/
+      size, segments) have no single GraphQL field to sort by and are
+      rejected with the sortable list in the error. Check
+      `list_available_columns`' `sortable` flag per column before
+      guessing. Omitting `sort` leaves row order up to the server
+      (unspecified, not guaranteed stable across requests).
 output_formats: [markdown, html]

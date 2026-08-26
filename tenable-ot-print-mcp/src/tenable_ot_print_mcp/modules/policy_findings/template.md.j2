@@ -1,0 +1,12 @@
+# {{ report_title }}
+
+_Generated {{ generated_at }} — {{ returned_count }} of {{ total_count }} finding(s) shown._
+
+| {{ columns | map(attribute='label') | join(' | ') }} |
+|{% for c in columns %}---|{% endfor %}
+{% for f in findings -%}
+| {{ f.cells | join(' | ') }} |
+{% endfor %}
+{% if not findings %}
+_No findings matched the given filters._
+{% endif %}

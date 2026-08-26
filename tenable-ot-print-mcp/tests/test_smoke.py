@@ -34,7 +34,7 @@ def test_asset_inventory_validate_params_rejects_bad_criticality():
 def test_render_report_end_to_end_no_live_em():
     """Fabricates fetch_data's output directly -- proves the module ->
     template -> theme -> filestore pipeline without needing a live
-    Tenable OT/EM connection."""
+    T1OE/EM connection."""
     module = load_module("asset_inventory")
     fake_data = {
         "total_count": 2,

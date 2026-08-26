@@ -96,7 +96,7 @@ def get_output_dir() -> Path:
 
 
 def get_ca_bundle_path(data_dir: Path) -> Path | None:
-    """Path to a custom CA bundle for verifying the Tenable OT/EM TLS
+    """Path to a custom CA bundle for verifying the T1OE/EM TLS
     certificate -- for deployments (like an internal/self-hosted EM)
     where that cert is signed by a private CA not in the public CA
     bundle httpx ships with.

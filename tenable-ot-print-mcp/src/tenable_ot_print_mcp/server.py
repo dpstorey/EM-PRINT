@@ -118,7 +118,7 @@ async def setup_post(request: Request) -> Response:
             "(PEM format) at MCP_TENABLE_CA_BUNDLE, or ./data/tenable-ca.pem, and retry."
         )
         return _render_error(
-            "Could not reach Tenable OT/EM or authenticate. Check URL, API key, and TLS settings."
+            "Could not reach T1OE/EM or authenticate. Check URL, API key, and TLS settings."
             + hint,
             status=502,
         )

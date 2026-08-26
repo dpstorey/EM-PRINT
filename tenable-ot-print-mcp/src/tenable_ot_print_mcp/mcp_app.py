@@ -21,7 +21,7 @@ from .modules import discover_manifests, load_module
 from .tenable_client import TenableClient
 
 SERVER_INSTRUCTIONS = """\
-You are connected to a Tenable OT print-report generator. Use
+You are connected to a Tenable One OT Exposure print-report generator. Use
 `list_report_types` to see available report modules and their
 parameters, then `submit_report_job` to generate one.
 
@@ -62,10 +62,31 @@ Operating principles:
 6. For asset_inventory specifically, custom fields are selectable
    either by their stable key (`custom_field_1`..`custom_field_10`)
    or by their live operator-configured name (e.g. "Owner", "Geotag")
-   -- exactly as that name appears in Tenable OT's own UI, since the
-   stable key is never shown there. Pass `site_uuid`/`site_name` to
+   -- exactly as that name appears in Tenable One OT Exposure's own UI,
+   since the stable key is never shown there. Pass `site_uuid`/`site_name` to
    `list_available_columns` to see the live names for a specific ICP
    before picking one.
+
+7. asset_inventory also accepts a `sort` param: a list of column
+   selectors (same name language as `columns`), each optionally
+   prefixed with "-" for descending, evaluated in priority order --
+   e.g. `["-total_risk", "name"]`. Not every column is sortable (some
+   are computed from a nested field with no single sortable GraphQL
+   field); `list_available_columns` reports a `sortable` flag per
+   column, check it before guessing.
+
+8. Two additional report modules: `vulnerability_findings` (Tenable's
+   per-asset x plugin `findings` surface -- port/service/status/plugin/
+   severity/VPR/CVEs) and `policy_findings` (Tenable's per-policy x
+   asset `policyFindings` surface -- this is also what the product's
+   GUI "Compliance"/"Policy Violations" pages show, just under a
+   different label). Both support `columns` the same way
+   asset_inventory does, but do NOT accept a `sort` param yet -- rows
+   always come back most-recently-hit first. That's a deliberate,
+   stated simplification (not every sortable field on these two
+   GraphQL surfaces has been confirmed against live/production
+   evidence the way asset_inventory's was), not a missing feature to
+   work around.
 """
 
 _THEMES_DIR = Path(__file__).parent / "themes"
@@ -186,7 +207,7 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
             "like 'Custom Field 3'. Omit both on a single-ICP EM; it auto-resolves.\n\n"
             "For asset_inventory, a custom-field slot's live label (the `label` "
             "shown here) works directly in `columns` too, not just its `key` -- "
-            "use whichever one Tenable OT's own UI actually shows you, since the "
+            "use whichever one Tenable One OT Exposure's own UI actually shows you, since "
             "stable key is never displayed there."
         ),
     )

@@ -1,7 +1,7 @@
 # tenable-ot-print-mcp (Phase 0 skeleton)
 
 MCP server that generates print-style reports (Markdown / HTML, PDF in
-Phase 1) from Tenable OT Enterprise Manager data via GraphQL, writing
+Phase 1) from Tenable One OT Exposure Enterprise Manager data via GraphQL, writing
 output directly to a mounted filestore rather than through the calling
 model's context window.
 

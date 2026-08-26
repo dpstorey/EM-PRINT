@@ -89,8 +89,8 @@ from .. import _base
 # schema paste); don't guess at a subfield selection the way the bare
 # field name itself was guessed.
 _QUERY_ASSETS = """
-query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $search: String) {
-  assets(first: $pageSize, after: $after, filter: $filter, search: $search) {
+query Q($pageSize: Int!, $after: String, $filter: AssetExpressionsParams, $search: String, $sort: [AssetSortParams!]) {
+  assets(first: $pageSize, after: $after, filter: $filter, search: $search, sort: $sort) {
     totalCount
     pageInfo { hasNextPage endCursor }
     nodes {
@@ -383,6 +383,38 @@ _DEFAULT_COLUMNS = (
 )
 
 
+def _build_name_to_key(custom_field_labels: dict[str, str]) -> dict[str, str]:
+    """Case-insensitive {selector name -> internal `_COLUMN_REGISTRY`
+    key}, covering every static column's stable key plus, for the 10
+    `custom_field_N` slots, this ICP's live operator-configured name
+    (2026-08-25, §0.14 -- Tenable's own UI never shows the stable key,
+    so a caller working from what the product shows needs the name
+    form to work too). Shared by `_resolve_columns` (which fields to
+    show) and `_resolve_sort` (§0.17 -- which field(s) to sort by) so
+    the two selector languages can't drift apart.
+    """
+    name_to_key: dict[str, str] = {key.lower(): key for key in _COLUMN_REGISTRY}
+    for slot, label in custom_field_labels.items():
+        key = _custom_field_key_for_slot(slot)
+        norm_label = (label or "").strip().lower()
+        if key and norm_label:
+            # A later slot silently wins a same-named collision --
+            # two custom fields sharing one operator-typed name is an
+            # edge case not worth failing every report over.
+            name_to_key[norm_label] = key
+    return name_to_key
+
+
+def _unknown_column_error(raw: str, custom_field_labels: dict[str, str]) -> ValueError:
+    static_names = sorted(k for k in _COLUMN_REGISTRY if _custom_field_slot(k) is None)
+    custom_names = []
+    for i in range(1, 11):
+        slot_key = f"custom_field_{i}"
+        label = custom_field_labels.get(_custom_field_slot(slot_key))
+        custom_names.append(f"{slot_key} ({label!r})" if label else slot_key)
+    return ValueError(f"Unknown column {raw!r}. Available columns: {static_names + custom_names}.")
+
+
 def _resolve_columns(requested: list[str], custom_field_labels: dict[str, str]) -> list[str]:
     """Resolve a caller's raw `columns` request into final internal
     `_COLUMN_REGISTRY` keys.
@@ -403,30 +435,14 @@ def _resolve_columns(requested: list[str], custom_field_labels: dict[str, str]) 
     name is now only caught after that live lookup rather than
     immediately at job submission.
     """
-    name_to_key: dict[str, str] = {key.lower(): key for key in _COLUMN_REGISTRY}
-    for slot, label in custom_field_labels.items():
-        key = _custom_field_key_for_slot(slot)
-        norm_label = (label or "").strip().lower()
-        if key and norm_label:
-            # A later slot silently wins a same-named collision --
-            # two custom fields sharing one operator-typed name is an
-            # edge case not worth failing every report over.
-            name_to_key[norm_label] = key
+    name_to_key = _build_name_to_key(custom_field_labels)
 
     resolved: list[str] = []
     seen: set[str] = set()
     for raw in requested:
         key = name_to_key.get(raw.strip().lower())
         if key is None:
-            static_names = sorted(k for k in _COLUMN_REGISTRY if _custom_field_slot(k) is None)
-            custom_names = []
-            for i in range(1, 11):
-                slot_key = f"custom_field_{i}"
-                label = custom_field_labels.get(_custom_field_slot(slot_key))
-                custom_names.append(f"{slot_key} ({label!r})" if label else slot_key)
-            raise ValueError(
-                f"Unknown column {raw!r}. Available columns: {static_names + custom_names}."
-            )
+            raise _unknown_column_error(raw, custom_field_labels)
         if key not in seen:
             seen.add(key)
             resolved.append(key)
@@ -435,6 +451,122 @@ def _resolve_columns(requested: list[str], custom_field_labels: dict[str, str]) 
             "columns must not be empty; omit it entirely to use the default columns "
             f"{list(_DEFAULT_COLUMNS)}."
         )
+    return resolved
+
+
+# Sort (§0.17, 2026-08-26): which `_COLUMN_REGISTRY` columns can be
+# passed to Tenable's real `sort: [AssetSortParams!]` argument, mapped
+# to the GraphQL field name each one sorts by. Confirmed against a
+# live browser network capture Dom shared of the product's own
+# inventory-table sort UI -- notably proving connection fields like
+# `macs` are valid sort fields too, not just scalars, and that
+# multiple {field, direction} entries are honored in order (the exact
+# capture: `sort: [{"field": "macs", "direction": "DescNullLast"},
+# {"field": "id", "direction": "AscNullLast"}]`). This directly
+# contradicts what EM-MCP's own `assets.py` implies (`assets` has no
+# `$sort` variable declared there at all) -- that only proves EM-MCP's
+# tool never needed sorting, not that the schema lacks it; the real
+# schema wins, same lesson as every other "trust the live evidence"
+# correction in this project's history (attackVector, custom-field UI
+# mapping, etc).
+#
+# Deliberately excluded: columns computed from a nested object rather
+# than one top-level Asset field -- `os_version`/`os_architecture`
+# (from `osDetails`), `backplane_name`/`backplane_size` (from
+# `backplane`), `segments` (a joined connection of objects, not a
+# flat string list like `macs`/`tags`), and `total_risk`/
+# `plugin_count`/`unresolved_events` (from `risk`). Tenable's sort
+# schema was not confirmed to accept a nested/dotted field path, and
+# guessing one risks the exact all-or-nothing GraphQL failure
+# `attackVector` caused (design-notes.md §0.12) rather than a clean
+# rejection here.
+_ASSET_SORT_FIELD: dict[str, str] = {
+    "asset_id": "id",
+    "name": "name",
+    "type": "type",
+    "super_type": "superType",
+    "category": "category",
+    "vendor": "vendor",
+    "model": "model",
+    "firmware_version": "firmwareVersion",
+    "os": "os",
+    "family": "family",
+    "description": "description",
+    "location": "location",
+    "purdue_level": "purdueLevel",
+    "criticality": "criticality",
+    "hidden": "hidden",
+    "run_status": "runStatus",
+    "run_status_time": "runStatusTime",
+    "extended_run_status": "extendedRunStatus",
+    "lifecycle_status": "lifecycleStatus",
+    "first_seen": "firstSeen",
+    "last_seen": "lastSeen",
+    "last_update": "lastUpdate",
+    "serial": "serial",
+    "slot": "slot",
+    "hardware_state": "hardwareState",
+    "discontinued_date": "discontinuedDate",
+    "replacement_product": "replacementProduct",
+    "last_hit": "lastHit",
+    "last_snapshot": "lastSnapshot",
+    "ip": "ips",
+    "mac": "macs",
+    "subnets": "subnets",
+    "tags": "tags",
+    "custom_field_1": "customField1",
+    "custom_field_2": "customField2",
+    "custom_field_3": "customField3",
+    "custom_field_4": "customField4",
+    "custom_field_5": "customField5",
+    "custom_field_6": "customField6",
+    "custom_field_7": "customField7",
+    "custom_field_8": "customField8",
+    "custom_field_9": "customField9",
+    "custom_field_10": "customField10",
+}
+
+# Only the two direction values seen in the live capture -- not
+# guessing at AscNullFirst/DescNullFirst without evidence either way.
+_ASSET_SORT_DIRECTIONS = {"asc": "AscNullLast", "desc": "DescNullLast"}
+
+
+def _resolve_sort(requested: list[str], custom_field_labels: dict[str, str]) -> list[dict[str, str]]:
+    """Resolve a caller's raw `sort` request into Tenable's real
+    `[{"field": ..., "direction": "AscNullLast"|"DescNullLast"}]`
+    shape for the `assets` query's `sort` argument.
+
+    Each entry is a column selector -- the same stable-key-or-live-
+    custom-field-name language `columns` uses, via the same
+    `_build_name_to_key` -- optionally prefixed with `-` for
+    descending (ascending is the default). Multiple entries sort in
+    the order given, exactly matching how Tenable's own UI builds this
+    argument (see the comment above `_ASSET_SORT_FIELD`).
+
+    Raises on any column that either doesn't resolve at all or
+    resolves to a real column that isn't in `_ASSET_SORT_FIELD` (i.e.
+    exists for display but has no confirmed top-level sort field) --
+    either way, a clear error here beats a live GraphQL failure.
+    """
+    name_to_key = _build_name_to_key(custom_field_labels)
+    resolved: list[dict[str, str]] = []
+    for raw in requested:
+        spec = raw.strip()
+        if spec.startswith("-"):
+            direction_word, spec = "desc", spec[1:].strip()
+        else:
+            direction_word = "asc"
+        key = name_to_key.get(spec.lower())
+        if key is None:
+            raise _unknown_column_error(spec, custom_field_labels)
+        sort_field = _ASSET_SORT_FIELD.get(key)
+        if sort_field is None:
+            raise ValueError(
+                f"Column {spec!r} can't be sorted on (it's computed from a nested "
+                f"field with no single sortable GraphQL field). Sortable columns: "
+                f"{sorted(_ASSET_SORT_FIELD)}."
+            )
+        resolved.append({"field": sort_field, "direction": _ASSET_SORT_DIRECTIONS[direction_word]})
     return resolved
 
 
@@ -480,6 +612,7 @@ class AssetInventoryModule(_base.ReportModule):
             "site_name",
             "search",
             "columns",
+            "sort",
         }
     )
 
@@ -564,6 +697,30 @@ class AssetInventoryModule(_base.ReportModule):
                     f"{list(_DEFAULT_COLUMNS)}."
                 )
 
+        # `sort` (§0.17, 2026-08-26): optional list of column selectors
+        # (or a comma-separated string), each optionally prefixed with
+        # `-` for descending -- e.g. `["-total_risk", "name"]`. Same
+        # split as `columns`: only structural validation here (list-
+        # or-comma-string, non-empty entries); resolving a selector to
+        # a real sortable GraphQL field -- and rejecting a column that
+        # exists but isn't sortable -- needs the live custom-field
+        # labels, so that happens in `fetch_data` via `_resolve_sort`.
+        # Omitting `sort` entirely means "no sort" -- the `$sort`
+        # GraphQL variable is left out of the request rather than sent
+        # as an empty list, matching how `$filter`/`$search` are
+        # already only sent when actually used.
+        sort_param = params.get("sort")
+        if sort_param is None:
+            sort = None
+        else:
+            if isinstance(sort_param, str):
+                sort_param = [c.strip() for c in sort_param.split(",")]
+            if not isinstance(sort_param, (list, tuple)):
+                raise ValueError(f"sort must be a list of column names, got {sort_param!r}")
+            sort = [str(raw).strip() for raw in sort_param if str(raw).strip()]
+            if not sort:
+                raise ValueError("sort must not be empty; omit it entirely for the default order.")
+
         return {
             "limit": limit,
             "criticality_at_least": criticality_at_least,
@@ -572,6 +729,7 @@ class AssetInventoryModule(_base.ReportModule):
             "site_name": site_name,
             "search": search,
             "columns": columns,
+            "sort": sort,
         }
 
     async def _resolve_icp_machine_id(self, client: TenableClient, params: dict[str, Any]) -> str:
@@ -629,6 +787,13 @@ class AssetInventoryModule(_base.ReportModule):
         # (§0.14) needs these labels regardless.
         custom_field_labels = await _CustomFieldLabelCache.get_or_fetch(client, icp_machine_id)
         resolved_columns = _resolve_columns(params["columns"], custom_field_labels)
+        # `sort` (§0.17): resolved here too, same reason as `columns`
+        # above -- needs the live custom-field labels to recognize a
+        # custom field sorted by its live name, and needs to happen
+        # before the first page is fetched since it's sent on every
+        # page request (a cursor's meaning depends on a stable sort
+        # order across the whole paginated walk).
+        resolved_sort = _resolve_sort(params["sort"], custom_field_labels) if params["sort"] else None
 
         filt = _build_filter(params)
         search = params.get("search")
@@ -647,6 +812,8 @@ class AssetInventoryModule(_base.ReportModule):
                 variables["filter"] = filt
             if search:
                 variables["search"] = search
+            if resolved_sort is not None:
+                variables["sort"] = resolved_sort
 
             data = await client.query(
                 _QUERY_ASSETS, variables=variables, icp_machine_id=icp_machine_id
@@ -697,6 +864,11 @@ class AssetInventoryModule(_base.ReportModule):
         or an ambiguous multi-ICP EM with no `site_uuid`/`site_name`
         given) -- this is a discovery/listing call, so it degrades
         gracefully rather than erroring.
+
+        Each entry also reports `sortable` (§0.17) -- whether this
+        column's key (or, for a custom field, its live name) can be
+        passed to `sort`. Not every displayable column is sortable;
+        see `_ASSET_SORT_FIELD`'s docstring for why.
         """
         labels = {key: label for key, (label, _getter) in _COLUMN_REGISTRY.items()}
         if client is not None:
@@ -711,7 +883,10 @@ class AssetInventoryModule(_base.ReportModule):
                         labels[key] = field_labels[slot]
             except Exception:
                 pass  # nothing resolvable right now -- generic labels are still useful
-        return [{"key": key, "label": labels[key]} for key in _COLUMN_REGISTRY]
+        return [
+            {"key": key, "label": labels[key], "sortable": key in _ASSET_SORT_FIELD}
+            for key in _COLUMN_REGISTRY
+        ]
 
     def default_columns(self) -> list[str]:
         """Columns used when `columns` is omitted -- see `list_available_columns`."""

@@ -1,4 +1,4 @@
-"""Minimal async GraphQL client for Tenable OT Security / Enterprise Manager.
+"""Minimal async GraphQL client for Tenable One OT Exposure / Enterprise Manager.
 
 Adapted from EM-MCP's tenable_client.py
 (../../EM-MCP/tenable-ot-mcp/src/tenable_ot_mcp/tenable_client.py) — this
@@ -61,7 +61,7 @@ query Q($pageSize: Int!) {
 
 
 class TenableError(Exception):
-    """Raised on a Tenable OT GraphQL error or transport failure."""
+    """Raised on a Tenable One OT Exposure GraphQL error or transport failure."""
 
     def __init__(self, message: str, status: int | None = None) -> None:
         super().__init__(message)
@@ -128,11 +128,11 @@ class TenableClient:
             async with httpx.AsyncClient(verify=self._verify, timeout=self._timeout) as client:
                 resp = await client.post(endpoint, headers=self._headers(), json=payload)
         except httpx.HTTPError as e:
-            raise TenableError(f"Transport error talking to Tenable OT/EM: {e}") from e
+            raise TenableError(f"Transport error talking to T1OE/EM: {e}") from e
 
         if resp.status_code >= 400:
             raise TenableError(
-                f"Tenable OT/EM returned HTTP {resp.status_code} from {endpoint}: {resp.text[:500]}",
+                f"T1OE/EM returned HTTP {resp.status_code} from {endpoint}: {resp.text[:500]}",
                 status=resp.status_code,
             )
 
@@ -142,7 +142,7 @@ class TenableClient:
             content_type = resp.headers.get("content-type", "unknown")
             snippet = " ".join(resp.text[:200].split())
             raise TenableError(
-                f"Tenable OT/EM returned a non-JSON response (HTTP {resp.status_code}, "
+                f"T1OE/EM returned a non-JSON response (HTTP {resp.status_code}, "
                 f"content-type={content_type!r}) from {endpoint}. First bytes: {snippet!r}. "
                 "If this was an ICP-relay query, the machine id likely does not match a "
                 "currently paired site.",
@@ -151,7 +151,7 @@ class TenableClient:
 
         if isinstance(body, dict) and body.get("errors"):
             messages = "; ".join(e.get("message", str(e)) for e in body["errors"])
-            raise TenableError(f"Tenable OT/EM GraphQL errors: {messages}", status=resp.status_code)
+            raise TenableError(f"T1OE/EM GraphQL errors: {messages}", status=resp.status_code)
 
         return body.get("data") or {}
 

@@ -12,7 +12,7 @@ from . import __version__
 
 BANNER = r"""
    ==================================================
-     Tenable OT Print Report MCP Server (Phase 0)
+     Tenable One OT Exposure Print Report MCP Server (Phase 0)
      v{version:<15}
      Sibling of EM-MCP (tenable-ot-mcp) -- see README.md
    ==================================================
@@ -26,7 +26,7 @@ def _print_banner() -> None:
 @click.group()
 @click.version_option(__version__, prog_name="tenable-ot-print-mcp")
 def cli() -> None:
-    """Tenable OT Print Report MCP Server."""
+    """Tenable One OT Exposure Print Report MCP Server."""
 
 
 @cli.command()
