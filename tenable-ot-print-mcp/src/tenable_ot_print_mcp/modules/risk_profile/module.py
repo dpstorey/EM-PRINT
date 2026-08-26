@@ -91,6 +91,28 @@ a copy of asset_inventory/vulnerability_findings/policy_findings:
    code -- missing optional annotations degrade gracefully rather than
    erroring.
 
+   **`Detail` lookup made deterministic, not caller-interpreted
+   (2026-08-26, per Dom).** Dom asked directly: "is it clear to the
+   model that the detail cells would refer to coordinates in this
+   lookup table?", after sharing a full RAISE reference table (5 grades
+   x 5 dimensions). It wasn't -- `risk_grade_descriptions` as it stood
+   only said the text was "caller-supplied", nothing told a calling LLM
+   it was supposed to be a (dimension, grade) lookup into a fixed table
+   it would have to read correctly across five separate dimensions
+   every report. Rather than just wording the docs better and hoping
+   an LLM applies that consistently, the lookup itself moved into this
+   module: `risk_grade_scale` takes the whole reference table once, as
+   {dimension: {grade: description}}, and `to_markdown_context` indexes
+   into it using `risk_grades`' already-resolved values -- the module
+   does the coordinate lookup, not the calling model. Still fully
+   rubric-agnostic (§ above) -- an object of objects, no fixed grade set
+   or dimension set assumed, so a different methodology (numeric scale,
+   different dimension codes, more or fewer grades) is just a
+   differently-shaped table passed to the same param. `risk_grade_descriptions`
+   still exists, now as a per-dimension override on top of whatever
+   `risk_grade_scale` looked up -- same "explicit override always wins"
+   merge order `risk_grades` itself already uses against custom fields.
+
 3. "Attack pathways" in EM-MCP's own tools (`query_attack_pathways`) is,
    by its own docstring, just the 1-hop `links` neighborhood -- "the
    server does NOT compute paths ... that's the AI's job." So
@@ -663,6 +685,44 @@ def _validate_str_map(value: Any, *, field: str) -> dict[str, str]:
     return {str(k).strip(): str(v).strip() for k, v in value.items() if str(k).strip()}
 
 
+def _validate_risk_grade_scale(value: Any) -> dict[str, dict[str, str]]:
+    """Optional full grade-scale reference table: {dimension: {grade:
+    description}}, e.g. an organization's own RAISE A-E x R/A/I/S/E
+    matrix. Deliberately rubric-agnostic like every other risk-grading
+    input here (§0.22) -- an object of objects, string keys/values
+    only, no fixed grade set or dimension set assumed.
+
+    2026-08-26, per Dom, who asked directly whether it was clear to a
+    calling LLM that a `risk_grade_descriptions` entry was supposed to
+    be a lookup into a fixed table like this one, keyed by dimension
+    and this asset's own assigned grade -- it wasn't; nothing said so.
+    Rather than trying to word that instruction well enough that an
+    LLM reliably picks the right row/column every time across several
+    dimensions, `risk_grade_scale` lets the module do that lookup
+    itself in `to_markdown_context` (using `risk_grades`' already-
+    validated values as the row key) -- the same "don't trust an LLM
+    to do mechanically-checkable work" principle this whole project's
+    module+render+theme architecture already runs on (see the module
+    docstring's opening paragraph). `risk_grade_descriptions` still
+    exists too, now as an explicit per-dimension override on top of
+    whatever this lookup produces -- same "explicit override always
+    wins" convention `risk_grades`/`risk_grade_fields` already use.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"risk_grade_scale must be an object of {{dimension: {{grade: description}}}}, got {value!r}")
+    scale: dict[str, dict[str, str]] = {}
+    for dim, row in value.items():
+        dim = str(dim).strip()
+        if not dim:
+            raise ValueError("risk_grade_scale dimension keys must be non-empty strings.")
+        if not isinstance(row, dict):
+            raise ValueError(f"risk_grade_scale[{dim!r}] must be an object of {{grade: description}}, got {row!r}")
+        scale[dim] = {str(g).strip(): str(d).strip() for g, d in row.items() if str(g).strip()}
+    return scale
+
+
 def _resolve_custom_field_slot(spec: str, label_to_slot: dict[str, str]) -> str:
     """Resolve a `risk_grade_fields` value to a `customFieldN` slot.
 
@@ -706,6 +766,7 @@ class RiskProfileModule(_base.ReportModule):
             "risk_grade_fields",
             "risk_dimension_labels",
             "risk_grade_descriptions",
+            "risk_grade_scale",
             "risk_scale_note",
             "analyst_assessment",
             "data_limitations",
@@ -750,6 +811,7 @@ class RiskProfileModule(_base.ReportModule):
             "risk_grade_fields": _validate_str_map(params.get("risk_grade_fields"), field="risk_grade_fields"),
             "risk_dimension_labels": _validate_str_map(params.get("risk_dimension_labels"), field="risk_dimension_labels"),
             "risk_grade_descriptions": _validate_str_map(params.get("risk_grade_descriptions"), field="risk_grade_descriptions"),
+            "risk_grade_scale": _validate_risk_grade_scale(params.get("risk_grade_scale")),
             "risk_scale_note": _normalize_str_list(params.get("risk_scale_note"), field="risk_scale_note"),
             "analyst_assessment": _normalize_str_list(params.get("analyst_assessment"), field="analyst_assessment"),
             "data_limitations": _normalize_str_list(params.get("data_limitations"), field="data_limitations"),
@@ -937,6 +999,24 @@ class RiskProfileModule(_base.ReportModule):
         risk_grades = dict(data.get("custom_field_grades") or {})
         risk_grades.update(params["risk_grades"])
 
+        # Detail text: look up each dimension's already-resolved grade
+        # in the caller's `risk_grade_scale` reference table (if any),
+        # then let a same-dimension `risk_grade_descriptions` entry
+        # override that looked-up value -- same "explicit override
+        # always wins" merge order as `risk_grades` just above. A
+        # dimension missing from the scale, or whose grade isn't a key
+        # in that dimension's row, simply has no looked-up value (not
+        # an error) -- it renders blank unless `risk_grade_descriptions`
+        # fills it in directly. 2026-08-26, per Dom (see
+        # `_validate_risk_grade_scale`'s docstring).
+        risk_grade_scale = params["risk_grade_scale"]
+        risk_grade_descriptions = {
+            dim: risk_grade_scale[dim][grade]
+            for dim, grade in risk_grades.items()
+            if dim in risk_grade_scale and grade in risk_grade_scale[dim]
+        }
+        risk_grade_descriptions.update(params["risk_grade_descriptions"])
+
         # Auto-disclose truncation on top of whatever the caller already
         # supplied in `data_limitations` -- doesn't depend on the caller
         # remembering to say so every time.
@@ -957,7 +1037,7 @@ class RiskProfileModule(_base.ReportModule):
             "risk_model": params["risk_model"],
             "risk_grades": risk_grades,
             "risk_dimension_labels": params["risk_dimension_labels"],
-            "risk_grade_descriptions": params["risk_grade_descriptions"],
+            "risk_grade_descriptions": risk_grade_descriptions,
             "risk_scale_note": params["risk_scale_note"],
             "vulnerabilities": vulns,
             "vuln_returned_count": len(vulns),

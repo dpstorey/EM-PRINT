@@ -116,19 +116,38 @@ params:
       `risk_grades`/`risk_grade_fields`, e.g. {"R": "Reputational", "A":
       "Financial Cost"}. Purely cosmetic (report column headers) -- a
       dimension with no configured label just displays its own code.
+  - name: risk_grade_scale
+    type: object
+    required: false
+    default: null
+    description: >-
+      Optional full grade-scale reference table: {dimension: {grade:
+      description}}, e.g. your organization's whole RAISE A-E x
+      R/A/I/S/E matrix (or any other rubric -- any dimension codes, any
+      grade values, letters or numbers). Pass this once and the module
+      looks up each dimension's "Detail" text itself, indexed by that
+      dimension's already-resolved grade from `risk_grades`/
+      `risk_grade_fields` -- you don't need to work out which cell
+      applies to which dimension every report. A dimension missing from
+      this table, or whose assigned grade isn't a key in that
+      dimension's row, simply has no looked-up text (not an error) --
+      renders a blank Detail cell unless `risk_grade_descriptions`
+      supplies one directly.
   - name: risk_grade_descriptions
     type: object
     required: false
     default: null
     description: >-
-      Optional per-dimension text explaining what this asset's assigned
-      grade means, e.g. {"R": "No harm or slight client concern", "A":
-      "Potential equipment or asset damage or financial loss $100K-1M"}.
-      Rendered in the grade table's "Detail" column next to that
-      dimension's "Category"/"Grade" cells. A dimension with no
-      configured description renders a blank Detail cell -- this module
-      has no built-in scale-to-text mapping for any rubric (RAISE or
-      otherwise), so the text is entirely caller-supplied.
+      Optional per-dimension override of the "Detail" text, e.g. {"R":
+      "No harm or slight client concern"}. Takes priority over whatever
+      `risk_grade_scale` would have looked up for that dimension --
+      same "explicit override always wins" rule `risk_grades` uses
+      against custom-field values. Useful for a one-off exception, or
+      for supplying Detail text without passing a whole
+      `risk_grade_scale` table at all. A dimension with neither an
+      override here nor a `risk_grade_scale` hit renders a blank Detail
+      cell -- this module has no built-in scale-to-text mapping for any
+      rubric (RAISE or otherwise); all of it is caller-supplied.
   - name: risk_scale_note
     type: array
     required: false
