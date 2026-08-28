@@ -56,5 +56,3 @@ If your EM/ICP's TLS cert is signed by an internal/private CA, drop it (PEM form
   instead of parallel copies that can drift.
 - Confirm real GraphQL pagination behavior against a live EM for
   `asset_inventory` at scale (10k+ assets).
-- Licensing for this repo (EM-MCP is Apache-2.0; this one is
-  unlicensed/internal for now — decide before any external listing).

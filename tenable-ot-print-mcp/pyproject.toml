@@ -8,11 +8,10 @@ version = "0.1.0"
 description = "MCP server that generates Tenable One OT Exposure print reports (Markdown/HTML/PDF) via Enterprise Manager GraphQL, writing output straight to a mounted filestore."
 readme = "README.md"
 requires-python = ">=3.12"
-# License intentionally unset — this is a new, separate repo from the
-# open-source tenable-ot-mcp (EM-MCP). Decide licensing before publishing
-# anywhere, including any Agentic Exchange listing.
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [
-    { name = "Dominic Storey", email = "dstorey@tenable.com" },
+    { name = "Dominic Storey", email = "dstorey@barossafarm.com" },
 ]
 keywords = ["mcp", "tenable", "ot-security", "reporting"]
 
