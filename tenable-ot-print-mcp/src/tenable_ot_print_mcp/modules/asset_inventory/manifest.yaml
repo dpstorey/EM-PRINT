@@ -9,6 +9,15 @@ description: >
   last seen, risk, unresolved events) is used when `columns` is
   omitted. Sample module proving the Phase 0 pipeline (GraphQL fetch
   -> Markdown -> HTML) end-to-end.
+
+  Also supports deterministic multi-asset RAISE-style grade columns
+  and a fatality-risk flag (`risk_grade_fields` / `risk_grade_scale` /
+  `risk_grade_scale_name` / `fatality_flag_words`), computed in Python
+  per asset rather than left to the calling LLM to derive across a
+  whole table -- see those params below. Grades still come from
+  wherever risk_profile's own grading params come from (Tenable custom
+  fields); this module never computes a grade itself, only reads and
+  cross-checks ones that already exist.
 params:
   - name: limit
     type: integer
@@ -82,4 +91,86 @@ params:
       `list_available_columns`' `sortable` flag per column before
       guessing. Omitting `sort` leaves row order up to the server
       (unspecified, not guaranteed stable across requests).
+  - name: risk_grade_fields
+    type: object
+    required: false
+    default: null
+    description: >-
+      Optional: append one grade column per risk dimension, read from
+      a Tenable asset custom field already populated through Tenable's
+      own UI. An object mapping an arbitrary dimension code to that
+      custom field's live operator-configured label (e.g. {"R":
+      "RAISE-R", "A": "RAISE-A", "I": "RAISE-I", "S": "RAISE-S", "E":
+      "RAISE-E"}) or its stable slot name (customField1..customField10)
+      -- same resolution `columns` already uses for custom fields.
+      Columns are appended in this object's key order, after whatever
+      `columns` already resolved to. An asset with no value in the
+      matching custom field shows "-" for that dimension, never blank.
+      Omitting this adds no columns at all (default -- every report
+      before this feature existed is unaffected). Unknown labels/slots
+      are rejected with the current configured list, same as an
+      unknown `columns` name.
+  - name: risk_dimension_labels
+    type: object
+    required: false
+    default: null
+    description: >-
+      Optional display labels for the dimension codes used in
+      `risk_grade_fields`, e.g. {"R": "Reputational", "A": "Financial
+      Cost"}. Purely cosmetic (column headers) -- a dimension with no
+      configured label just uses its own code as the header.
+  - name: risk_grade_scale
+    type: object
+    required: false
+    default: null
+    description: >-
+      Optional full grade-scale reference table: {dimension: {grade:
+      description}}, e.g. your organization's whole RAISE A-E x
+      R/A/I/S/E matrix (any dimension codes, any grade values). Not
+      rendered as its own column here -- used only to look up each
+      asset's already-resolved (dimension, grade) pair's description
+      text and check it for `fatality_flag_words`, producing the
+      "Fatality Risk" column. This is the same shape risk_profile's
+      own `risk_grade_scale` param uses, and scale storage is shared
+      across both modules (not module-scoped) -- a scale already saved
+      via risk_profile's `save_risk_grade_scale` (e.g. "RAISE") is
+      immediately usable here via `risk_grade_scale_name`, no separate
+      save step. Don't retype your whole table into every call: save
+      it once (via either module) and pass `risk_grade_scale_name`
+      instead; this param still works as a one-off override merged on
+      top of a saved table, same "explicit override always wins"
+      convention used everywhere else in this project.
+  - name: risk_grade_scale_name
+    type: string
+    required: false
+    default: null
+    description: >-
+      References a risk_grade_scale table already saved server-side
+      via the `save_risk_grade_scale` tool (works from either
+      asset_inventory or risk_profile -- storage isn't module-scoped;
+      call `list_risk_grade_scales` to see what's saved), instead of
+      resupplying the whole table in `risk_grade_scale` every report.
+      The saved table is the base; an inline `risk_grade_scale` in the
+      same call overrides it per (dimension, grade). An unknown name
+      is rejected outright, naming what is currently saved.
+  - name: fatality_flag_words
+    type: array
+    required: false
+    default: ["fatality", "fatalities"]
+    description: >-
+      Words/phrases to scan for (case-insensitive substring match) in
+      each asset's looked-up risk_grade_scale description text, across
+      every dimension that asset has a grade for -- not just its
+      highest-risk one. Adds a "Fatality Risk" column showing "YES
+      (<dimension>:<grade>)" for the first dimension whose description
+      matched, or "No" otherwise (never "-", even for an asset with no
+      grades at all). This column only appears when `risk_grade_fields`
+      AND a `risk_grade_scale` (inline or via `risk_grade_scale_name`)
+      are both supplied -- with neither, there's no description text to
+      scan. Replaces relying on the calling LLM to check this rule
+      consistently across a multi-row table (see design-notes.md
+      §0.31/§0.32) with a deterministic per-asset, per-dimension check
+      done here instead. Pass an empty list to disable the flag
+      entirely while still keeping the grade columns from
+      `risk_grade_fields`.
 output_formats: [markdown, html]

@@ -30,8 +30,11 @@ dynamically assembling GraphQL query text per request.
 from __future__ import annotations
 
 import ipaddress
+import json
+import re
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from ...tenable_client import TenableClient
@@ -218,6 +221,210 @@ def _custom_field_key_for_slot(slot: str) -> str | None:
     if not slot.startswith(prefix):
         return None
     return "custom_field_" + slot[len(prefix) :]
+
+
+# ----------------------------------------------------------------------
+# Deterministic RAISE-grade + fatality-flag columns (2026-08-27, per
+# Dom -- design-notes.md §0.31/§0.32). Dom's own AGENT.md prompt tuning
+# got a multi-asset RAISE summary table and a "flag any dimension whose
+# description mentions the word fatality" rule to work *sometimes*, on
+# a small backend that reliably admitted it wasn't checking every
+# asset's every dimension methodically. That's exactly the "don't
+# trust an LLM to do mechanically-checkable work" problem risk_profile
+# already solved once for a single asset's Detail-lookup (see that
+# module's docstring point 2) -- so this module borrows risk_profile's
+# exact scale-storage + validator machinery (duplicated, not shared --
+# same "duplicate now, dedup later" convention as everywhere else in
+# this project; see design-notes.md) and computes both the grade
+# columns and the fatality flag itself, in Python, once per asset, on
+# every report -- not something the calling LLM has to get right by
+# re-deriving it across a whole table every time it's asked.
+#
+# Deliberately rubric-agnostic, same as risk_profile: nothing here
+# hardcodes RAISE's five dimensions, a letter scale, or the word
+# "fatality" as anything but a caller-supplied default. `risk_grade_fields`
+# maps an arbitrary dimension code to the Tenable custom field that
+# already holds that asset's grade for it (by live label or stable
+# slot name -- resolved against this same ICP's `_CustomFieldLabelCache`
+# that `columns`/`sort` already use, so this costs nothing extra beyond
+# one already-cached query). `risk_grade_scale`/`risk_grade_scale_name`
+# is the same {dimension: {grade: description}} reference table
+# risk_profile uses for its "Detail" column; here it's not rendered as
+# its own column -- it's only used to look up each asset's per-
+# dimension description text and scan it for `fatality_flag_words`
+# (default ("fatality", "fatalities"), matching the exact AGENT.md
+# trigger word Dom asked for). Because scale storage is not actually
+# module-scoped (`_scales_dir` below resolves to the same
+# `<data_dir>/risk_grade_scales/` path regardless of which module
+# calls it -- see design-notes.md), a scale already saved from
+# risk_profile (e.g. "RAISE") is usable here immediately via the same
+# `risk_grade_scale_name`, with no separate save step.
+#
+# Both new column groups are strictly additive and zero-cost when
+# unused: omitting `risk_grade_fields` (as every report before this
+# did) adds no columns, no extra query, and no behavior change at all.
+
+_CUSTOM_FIELD_SLOTS = [f"customField{i}" for i in range(1, 11)]
+
+# Same rubric-agnostic dimension-count guard risk_profile uses for
+# risk_grades/risk_grade_scale -- a sane cap against a malformed
+# payload, not a real product ceiling (no real rubric approaches 20
+# dimensions).
+_MAX_RISK_DIMENSIONS = 20
+
+
+def _normalize_str_list(value: Any, *, field: str) -> list[str]:
+    """Duplicated from risk_profile/module.py, not shared -- see
+    design-notes.md's "duplicate now, dedup later" convention."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [line.strip() for line in value.splitlines() if line.strip()]
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    raise ValueError(f"{field} must be a string or list of strings, got {value!r}")
+
+
+def _validate_str_map(value: Any, *, field: str) -> dict[str, str]:
+    """Duplicated from risk_profile/module.py -- shape-only validation,
+    rubric-agnostic (any dimension codes, any custom-field spec)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} must be an object of {{key: value}}, got {value!r}")
+    if len(value) > _MAX_RISK_DIMENSIONS:
+        raise ValueError(f"{field} has {len(value)} entries; max {_MAX_RISK_DIMENSIONS}.")
+    return {str(k).strip(): str(v).strip() for k, v in value.items() if str(k).strip()}
+
+
+def _validate_risk_grade_scale(value: Any) -> dict[str, dict[str, str]]:
+    """Duplicated from risk_profile/module.py -- see that module's
+    docstring point 2 for why this is deliberately rubric-agnostic
+    (an object of objects, no fixed grade or dimension set assumed)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"risk_grade_scale must be an object of {{dimension: {{grade: description}}}}, got {value!r}"
+        )
+    scale: dict[str, dict[str, str]] = {}
+    for dim, row in value.items():
+        dim = str(dim).strip()
+        if not dim:
+            raise ValueError("risk_grade_scale dimension keys must be non-empty strings.")
+        if not isinstance(row, dict):
+            raise ValueError(f"risk_grade_scale[{dim!r}] must be an object of {{grade: description}}, got {row!r}")
+        scale[dim] = {str(g).strip(): str(d).strip() for g, d in row.items() if str(g).strip()}
+    return scale
+
+
+# Stored risk_grade_scale tables -- same bind-mount path risk_profile
+# already uses (`<data_dir>/risk_grade_scales/<name>.json`; note
+# `_scales_dir` is NOT module-scoped despite living in this module's
+# file -- see the block comment above). Duplicated helpers, not
+# imported from risk_profile, per this project's established
+# "duplicate now, dedup later" convention across module plugin dirs.
+
+_SCALE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _scales_dir(data_dir: Path) -> Path:
+    return data_dir / "risk_grade_scales"
+
+
+def _validate_scale_name(name: str) -> str:
+    name = str(name).strip()
+    if not name or not _SCALE_NAME_RE.match(name):
+        raise ValueError(
+            f"risk_grade_scale_name {name!r} must be non-empty and contain only "
+            "letters, digits, '-', and '_' -- it's used directly as a filename, "
+            "not a path (no '/', '..', etc.)."
+        )
+    return name
+
+
+def _load_stored_risk_grade_scale(data_dir: Path, name: str) -> dict[str, dict[str, str]]:
+    name = _validate_scale_name(name)
+    scales_dir = _scales_dir(data_dir)
+    path = scales_dir / f"{name}.json"
+    if not path.is_file():
+        available = sorted(p.stem for p in scales_dir.glob("*.json")) if scales_dir.is_dir() else []
+        raise ValueError(
+            f"No stored risk_grade_scale named {name!r} -- looked for {path}. "
+            f"Available: {available if available else '(none saved yet)'}. "
+            "Save one first with the save_risk_grade_scale tool."
+        )
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Stored risk_grade_scale {name!r} at {path} is not valid JSON: {e}") from e
+    return _validate_risk_grade_scale(raw)
+
+
+def _resolve_risk_grade_field_slot(spec: str, custom_field_labels: dict[str, str]) -> str:
+    """Resolve a `risk_grade_fields` value to a `customFieldN` slot.
+
+    Accepts either the operator's live label (matched case-insensitively
+    against this ICP's current custom-field configuration -- the same
+    `custom_field_labels` cache `columns`/`sort` already resolve) or the
+    stable slot name directly (`customField3`, case-insensitive).
+    Identical in spirit to risk_profile's own `_resolve_custom_field_slot`
+    (duplicated, not shared) -- both caches are keyed {slot: label}.
+    """
+    normalized = spec.strip()
+    for slot, label in custom_field_labels.items():
+        if label.lower() == normalized.lower():
+            return slot
+    candidate = normalized[0].lower() + normalized[1:] if normalized else normalized
+    if candidate in _CUSTOM_FIELD_SLOTS:
+        return candidate
+    known_labels = sorted(custom_field_labels.values())
+    raise ValueError(
+        f"risk_grade_fields value {spec!r} does not match a configured custom-field label "
+        f"({known_labels}) or a slot name (customField1..customField10)."
+    )
+
+
+def _asset_risk_grades(node: dict[str, Any], risk_grade_slots: dict[str, str]) -> dict[str, str]:
+    """One asset's {dimension: grade} using its already-fetched
+    customField1..10 values -- no extra query per asset; the slots
+    were resolved once in fetch_data and the values are already on
+    every node from `_QUERY_ASSETS`. A dimension with no value on this
+    asset renders "-" (matches risk_profile's own missing-grade
+    convention), never blank/None."""
+    grades: dict[str, str] = {}
+    for dimension, slot in risk_grade_slots.items():
+        raw = node.get(slot)
+        grades[dimension] = str(raw).strip() if raw else "-"
+    return grades
+
+
+def _fatality_flag(
+    grades: dict[str, str],
+    risk_grade_scale: dict[str, dict[str, str]],
+    fatality_flag_words: list[str],
+) -> str:
+    """Deterministic replacement for the AGENT.md-prompted "flag any
+    asset whose risk table mentions fatality" rule that (design-
+    notes.md §0.31) the model admitted it applied inconsistently across
+    a multi-row table. Scans every one of THIS asset's already-resolved
+    (dimension, grade) pairs' looked-up `risk_grade_scale` description
+    text for any of `fatality_flag_words` (case-insensitive substring
+    match) -- checking every dimension every time, not just the
+    highest-risk one, is the whole point of moving this into code.
+    Returns "No" (never "-") when nothing matches or there's nothing to
+    check, matching Dom's own reference table where an ungraded asset
+    still shows "No" for Fatality Risk."""
+    if not fatality_flag_words:
+        return "No"
+    words = [w.lower() for w in fatality_flag_words]
+    for dimension, grade in grades.items():
+        if grade in ("-", ""):
+            continue
+        description = (risk_grade_scale.get(dimension) or {}).get(grade, "")
+        if description and any(w in description.lower() for w in words):
+            return f"YES ({dimension}:{grade})"
+    return "No"
 
 
 # Tenable's AssetExpressionsParams op vocabulary (see EM-MCP's
@@ -613,8 +820,19 @@ class AssetInventoryModule(_base.ReportModule):
             "search",
             "columns",
             "sort",
+            "risk_grade_fields",
+            "risk_dimension_labels",
+            "risk_grade_scale",
+            "risk_grade_scale_name",
+            "fatality_flag_words",
         }
     )
+
+    # Matches AGENT.md's own trigger word (design-notes.md §0.31) --
+    # the exact rule Dom asked for was "flag any asset whose risk table
+    # mentions fatality", now enforced deterministically instead of by
+    # prompt alone. Only used when `fatality_flag_words` is omitted.
+    _DEFAULT_FATALITY_FLAG_WORDS = ("fatality", "fatalities")
 
     def validate_params(self, params: dict[str, Any]) -> dict[str, Any]:
         unknown = set(params) - self._KNOWN_PARAMS
@@ -721,6 +939,24 @@ class AssetInventoryModule(_base.ReportModule):
             if not sort:
                 raise ValueError("sort must not be empty; omit it entirely for the default order.")
 
+        # RAISE-grade + fatality-flag columns (2026-08-27, §0.32) --
+        # structural validation only, same rubric-agnostic rules
+        # risk_profile already applies to these same param shapes
+        # (duplicated, not shared -- see the block comment above
+        # `_CUSTOM_FIELD_SLOTS`). Resolving a `risk_grade_fields` spec
+        # against a live custom-field label needs a client, so -- same
+        # as `columns`/`sort` above -- that happens later, in
+        # `fetch_data`, not here.
+        risk_grade_scale_name = params.get("risk_grade_scale_name")
+        if risk_grade_scale_name is not None and not isinstance(risk_grade_scale_name, str):
+            raise ValueError(f"risk_grade_scale_name must be a string, got {risk_grade_scale_name!r}")
+
+        fatality_flag_words_param = params.get("fatality_flag_words")
+        if fatality_flag_words_param is None:
+            fatality_flag_words = list(self._DEFAULT_FATALITY_FLAG_WORDS)
+        else:
+            fatality_flag_words = _normalize_str_list(fatality_flag_words_param, field="fatality_flag_words")
+
         return {
             "limit": limit,
             "criticality_at_least": criticality_at_least,
@@ -730,7 +966,57 @@ class AssetInventoryModule(_base.ReportModule):
             "search": search,
             "columns": columns,
             "sort": sort,
+            "risk_grade_fields": _validate_str_map(params.get("risk_grade_fields"), field="risk_grade_fields"),
+            "risk_dimension_labels": _validate_str_map(
+                params.get("risk_dimension_labels"), field="risk_dimension_labels"
+            ),
+            "risk_grade_scale": _validate_risk_grade_scale(params.get("risk_grade_scale")),
+            "risk_grade_scale_name": risk_grade_scale_name,
+            "fatality_flag_words": fatality_flag_words,
         }
+
+    def resolve_stored_params(self, params: dict[str, Any], data_dir: Path) -> dict[str, Any]:
+        """Optional hook -- same `getattr(instance, ..., None)` pattern
+        mcp_app.py already uses for `list_columns`/`default_columns`,
+        and the exact same resolution risk_profile's own
+        `resolve_stored_params` performs (duplicated, not shared).
+        Resolves `risk_grade_scale_name` into a table already saved
+        via `save_risk_grade_scale` at `<data_dir>/risk_grade_scales/
+        <name>.json` -- note that path is NOT module-scoped (see the
+        block comment above `_CUSTOM_FIELD_SLOTS`), so a scale saved
+        from risk_profile is usable here with no extra setup. Merge
+        order, same "explicit override always wins" convention as
+        everywhere else in this project: the stored table is the base,
+        an inline `risk_grade_scale` passed in this same call overrides
+        it per (dimension, grade)."""
+        name = params.get("risk_grade_scale_name")
+        if not name:
+            return params
+        stored = _load_stored_risk_grade_scale(data_dir, name)
+        merged: dict[str, dict[str, str]] = {dim: dict(row) for dim, row in stored.items()}
+        for dim, row in params["risk_grade_scale"].items():
+            merged.setdefault(dim, {}).update(row)
+        resolved = dict(params)
+        resolved["risk_grade_scale"] = merged
+        return resolved
+
+    def save_stored_scale(self, data_dir: Path, name: str, scale: Any) -> None:
+        """Identical to risk_profile's own `save_stored_scale` -- same
+        path, same validation -- duplicated per this project's
+        "duplicate now, dedup later" convention rather than imported
+        across module plugin directories."""
+        name = _validate_scale_name(name)
+        validated = _validate_risk_grade_scale(scale)
+        scales_dir = _scales_dir(data_dir)
+        scales_dir.mkdir(parents=True, exist_ok=True)
+        path = scales_dir / f"{name}.json"
+        path.write_text(json.dumps(validated, indent=2, sort_keys=True), encoding="utf-8")
+
+    def list_stored_scales(self, data_dir: Path) -> list[str]:
+        scales_dir = _scales_dir(data_dir)
+        if not scales_dir.is_dir():
+            return []
+        return sorted(p.stem for p in scales_dir.glob("*.json"))
 
     async def _resolve_icp_machine_id(self, client: TenableClient, params: dict[str, Any]) -> str:
         """Assets live on paired ICPs, not the EM root -- resolve which
@@ -787,6 +1073,17 @@ class AssetInventoryModule(_base.ReportModule):
         # (§0.14) needs these labels regardless.
         custom_field_labels = await _CustomFieldLabelCache.get_or_fetch(client, icp_machine_id)
         resolved_columns = _resolve_columns(params["columns"], custom_field_labels)
+
+        # RAISE-grade columns (§0.32): resolve each dimension's custom-
+        # field spec against this same live label cache, same fail-
+        # fast-before-paginating reasoning as `columns`/`sort` above --
+        # and zero cost when `risk_grade_fields` is omitted, which is
+        # every report before this feature existed.
+        risk_grade_fields = params.get("risk_grade_fields") or {}
+        risk_grade_slots: dict[str, str] = {
+            dimension: _resolve_risk_grade_field_slot(spec, custom_field_labels)
+            for dimension, spec in risk_grade_fields.items()
+        }
         # `sort` (§0.17): resolved here too, same reason as `columns`
         # above -- needs the live custom-field labels to recognize a
         # custom field sorted by its live name, and needs to happen
@@ -841,6 +1138,7 @@ class AssetInventoryModule(_base.ReportModule):
             "nodes": nodes if limit is None else nodes[:limit],
             "custom_field_labels": custom_field_labels,
             "columns": resolved_columns,
+            "risk_grade_slots": risk_grade_slots,
         }
 
     async def list_columns(
@@ -917,9 +1215,45 @@ class AssetInventoryModule(_base.ReportModule):
             # applied to the header this time.
             columns.append({"key": key, "label": _render_cell(label)})
 
+        # RAISE-grade + fatality-flag columns (§0.32): dynamically
+        # appended AFTER whatever `columns` already resolved to, in the
+        # order `risk_grade_fields` was given -- these aren't
+        # `_COLUMN_REGISTRY` entries (there's no fixed rubric to
+        # register), so they're built here rather than threaded through
+        # `_resolve_columns`. Both are no-ops (empty lists, no columns
+        # added, no per-row cost) when `risk_grade_fields` was omitted
+        # -- every report that doesn't use this feature is unaffected.
+        risk_grade_slots: dict[str, str] = data.get("risk_grade_slots") or {}
+        risk_grade_scale: dict[str, dict[str, str]] = params.get("risk_grade_scale") or {}
+        fatality_flag_words: list[str] = params.get("fatality_flag_words") or []
+        dimension_labels: dict[str, str] = params.get("risk_dimension_labels") or {}
+
+        dimension_codes = list(risk_grade_slots.keys())
+        for dimension in dimension_codes:
+            columns.append(
+                {
+                    "key": f"__risk_grade__{dimension}",
+                    "label": _render_cell(dimension_labels.get(dimension, dimension)),
+                }
+            )
+        # The fatality column only means anything once there's both a
+        # per-asset grade to look up (risk_grade_slots) AND a scale
+        # table to look its description up in (risk_grade_scale) --
+        # otherwise there's no description text to scan and this stays
+        # absent rather than rendering a column that's always "No".
+        include_fatality_column = bool(risk_grade_slots) and bool(risk_grade_scale) and bool(fatality_flag_words)
+        if include_fatality_column:
+            columns.append({"key": "__fatality_risk__", "label": "Fatality Risk"})
+
         assets = []
         for node in data.get("nodes") or []:
             cells = [_render_cell(_COLUMN_REGISTRY[key][1](node)) for key in column_keys]
+            if risk_grade_slots:
+                grades = _asset_risk_grades(node, risk_grade_slots)
+                for dimension in dimension_codes:
+                    cells.append(_render_cell(grades.get(dimension, "-")))
+                if include_fatality_column:
+                    cells.append(_render_cell(_fatality_flag(grades, risk_grade_scale, fatality_flag_words)))
             assets.append({"cells": cells})
 
         return {
