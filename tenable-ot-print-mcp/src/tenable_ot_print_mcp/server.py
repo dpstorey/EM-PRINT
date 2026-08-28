@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Starlette app exposing /healthz, /setup, /.well-known/*, and /mcp.
 
 Adapted from EM-MCP's server.py — same setup-wizard-then-restart model:

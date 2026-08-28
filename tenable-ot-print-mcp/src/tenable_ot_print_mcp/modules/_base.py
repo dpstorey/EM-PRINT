@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Report module contract.
 
 Each module under modules/<name>/ implements ReportModule and ships a

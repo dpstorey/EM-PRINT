@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """policy_findings report module.
 
 GraphQL surface confirmed against EM-MCP's real, production

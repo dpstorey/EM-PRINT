@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Minimal async GraphQL client for Tenable One OT Exposure / Enterprise Manager.
 
 Adapted from EM-MCP's tenable_client.py

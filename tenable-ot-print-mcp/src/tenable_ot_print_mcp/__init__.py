@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tenable One OT Exposure Print Report MCP Server — Phase 0 skeleton.
 
 Sibling project to EM-MCP (tenable-ot-mcp). See README.md and the

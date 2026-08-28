@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """risk_profile report module — a single-asset risk-profile dossier.
 
 Built 2026-08-26 in response to Dom pointing at EM-MCP's `prompt/AGENT.md`:

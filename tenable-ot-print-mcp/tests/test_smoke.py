@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Phase 0 smoke test: module discovery + end-to-end render, no live EM needed."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Regression tests for custom-CA-bundle support (added after Dom's real EM
 turned out to use an internally-signed TLS cert)."""
 

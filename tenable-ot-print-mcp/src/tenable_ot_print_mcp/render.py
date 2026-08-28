@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Markdown -> themed HTML rendering pipeline. PDF (WeasyPrint) is Phase 1 —
 see pyproject.toml's `pdf` extra, not wired in here yet.
 

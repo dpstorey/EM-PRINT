@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Bearer-token authentication for the MCP endpoint.
 
 Identical pattern to EM-MCP's auth.py: one token issued at setup,

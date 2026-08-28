@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Report-retention policy: save a rule once, apply it later.
 
 2026-08-26, per Dom: "a trim reports capability. I'm thinking two

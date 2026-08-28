@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Builds the FastMCP server and exposes it as a Streamable HTTP ASGI app.
 
 Phase 0: `submit_report_job` runs synchronously and returns file paths

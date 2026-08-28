@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Self-signed TLS certificate generation for first-run HTTPS.
 
 Adapted verbatim from EM-MCP's tls.py (../../EM-MCP/tenable-ot-mcp/src/tenable_ot_mcp/tls.py) —

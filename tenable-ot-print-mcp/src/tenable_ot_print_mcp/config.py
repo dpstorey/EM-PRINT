@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Encrypted configuration persisted to /data/config.enc.
 
 Adapted from EM-MCP's config.py — same Fernet-encrypted-file pattern,

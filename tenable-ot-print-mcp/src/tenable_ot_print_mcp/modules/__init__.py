@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Report module registry: discovers modules/<name>/manifest.yaml + module.py.
 
 In-house-only plugin trust model (see design-notes.md §4): modules are

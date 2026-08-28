@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sample Phase 0 report module: asset_inventory.
 
 GraphQL field selection mirrors EM-MCP's tools/assets.py `_ASSET_BASE`

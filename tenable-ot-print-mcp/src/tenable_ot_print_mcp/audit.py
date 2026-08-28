@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Append-only audit log for report jobs.
 
 Phase 0: local JSONL only, same baseline as EM-MCP's audit.py today
