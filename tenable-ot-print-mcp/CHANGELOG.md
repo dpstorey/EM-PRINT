@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.5] - 2026-08-31
+
+_Version jumped from 0.1.0 to 0.4.5 to reflect how much this has iterated past the initial skeleton, and to echo the point in EM-MCP's own history (v0.4.5) that this print server draws its code ideas from. No functional releases exist at the intermediate numbers._
 
 ### Fixed
 - **Licensing** — corrected the copyright holder in `LICENSE`'s filled-in

@@ -6,5 +6,5 @@ Sibling project to EM-MCP (tenable-ot-mcp). See README.md and the
 phased build plan.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.4.5"
 __maintainer__ = "Dominic Storey"

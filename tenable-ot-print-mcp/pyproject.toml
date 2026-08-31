@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tenable-ot-print-mcp"
-version = "0.1.0"
+version = "0.4.5"
 description = "MCP server that generates Tenable One OT Exposure print reports (Markdown/HTML/PDF) via Enterprise Manager GraphQL, writing output straight to a mounted filestore."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -5,13 +5,10 @@ PDF planned for Phase 1) from Tenable One OT Exposure Enterprise
 Manager data via GraphQL, writing output directly to a mounted
 filestore rather than through the calling model's context window.
 
-Sibling repo: `../EM-MCP` (the `tenable-ot-mcp` project). This repo
-currently **duplicates** a few files from there (`tenable_client.py`,
-`tls.py`, `config.py`, `auth.py`) rather than importing a shared
-package — that's a deliberate placeholder, not the final design. See
-"Open items" below.
+Use my EM-MCP repo to interface to the Tenable One Exposure system. 
+## Status: Work in progress!  
 
-## Status: Phase 0 — read + print pipeline built, async/PDF still to come
+Read + print pipeline built.
 
 Nine MCP tools are live:
 
@@ -22,7 +19,9 @@ Nine MCP tools are live:
 - `list_recent_report_jobs` — most recent jobs from the audit log.
 
 **Report generation**
-- `submit_report_job` — the only report-generation tool, but it now covers four modules: `asset_inventory`, `vulnerability_findings`, `policy_findings`, `risk_profile`. Runs **synchronously** (no job queue yet — that's Phase 2), writes a themed Markdown + HTML report to `MCP_OUTPUT_DIR` (default `./output`), and returns only the file paths and a small summary — never the rendered content — back to the caller.
+- `submit_report_job` — the only report-generation tool, but it now covers four modules: `asset_inventory`, `vulnerability_findings`, `policy_findings`, `risk_profile`. Runs **synchronously** (fortunately, it's fast!), writes a themed Markdown + HTML report to `MCP_OUTPUT_DIR` (default `./output`), and returns only the file paths and a small summary — never the rendered content — back to the caller.
+
+./output is mapped via docker volume mount to an external directory, typically a sharepoint.
 
 **Risk-grade scales** (for `risk_profile` reports)
 - `save_risk_grade_scale` / `list_risk_grade_scales` — save and reuse a named risk-grading table instead of resending it on every call.
@@ -55,10 +54,4 @@ MCP_TLS_DISABLE=1 tenable-ot-print-mcp serve
 
 If your EM/ICP's TLS cert is signed by an internal/private CA, drop it (PEM format) at `./data/tenable-ca.pem` (matches `MCP_DATA_DIR`'s default) before hitting `/setup`, or point `MCP_TENABLE_CA_BUNDLE` at it. See `config.get_ca_bundle_path()`.
 
-## Open items
 
-- Decide how `tenable_client.py` / `tls.py` / `config.py` / `auth.py`
-  become an actual shared package both this repo and EM-MCP import,
-  instead of parallel copies that can drift.
-- Confirm real GraphQL pagination behavior against a live EM for
-  `asset_inventory` at scale (10k+ assets).
