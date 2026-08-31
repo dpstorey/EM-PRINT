@@ -14,12 +14,6 @@ authors = [
     { name = "Dominic Storey", email = "dstorey@barossafarm.com" },
 ]
 keywords = ["mcp", "tenable", "ot-security", "reporting"]
-
-[project.urls]
-Homepage = "https://github.com/dpstorey/EM-PRINT"
-Repository = "https://github.com/dpstorey/EM-PRINT"
-Issues = "https://github.com/dpstorey/EM-PRINT/issues"
-
 dependencies = [
     "mcp[cli]>=1.28,<2",
     "httpx>=0.27",
@@ -32,6 +26,11 @@ dependencies = [
     "PyYAML>=6.0",
     "markdown>=3.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dpstorey/EM-PRINT"
+Repository = "https://github.com/dpstorey/EM-PRINT"
+Issues = "https://github.com/dpstorey/EM-PRINT/issues"
 
 [project.optional-dependencies]
 # Phase 1: PDF rendering. Not installed by default yet — Phase 0 ships
