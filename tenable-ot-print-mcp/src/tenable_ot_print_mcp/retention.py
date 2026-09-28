@@ -37,9 +37,18 @@ RETENTION_FILENAME = "report_retention.json"
 
 _VALID_MODES = ("count", "days", "weeks", "months")
 
-# Matches render.py's own filename convention exactly:
+# Matches the *leading* piece of render.py's filename convention:
 #   ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-#   base = job_dir / f"{ts}-{slug}"
+#   job_id = secrets.token_hex(4)          # added 2026-09-28, see render.py
+#   base = job_dir / f"{ts}-{job_id}-{slug}"
+# Only the timestamp prefix is matched/parsed here -- `job_id` and
+# `slug` are opaque as far as this regex cares, so this still matches
+# both pre-2026-09-28 files (no job_id segment) and current ones
+# without any change, and `f.stem` (the full "<ts>-<job_id>-<slug>",
+# or the older "<ts>-<slug>") is still what groups a job's .md/.html
+# pair together -- which also means job_id's uniqueness now prevents
+# same-second jobs from colliding on that grouping key too, not just
+# on disk (see render.py's comment for the bug this fixed).
 # A file that doesn't start with this exact timestamp shape is not
 # something this server wrote itself -- list_report_jobs skips it
 # entirely, so purge_reports can never delete a file it doesn't

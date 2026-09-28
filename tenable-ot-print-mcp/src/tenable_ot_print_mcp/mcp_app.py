@@ -239,9 +239,11 @@ def build_mcp_app(cfg: Config, audit: AuditLog, data_dir: Path) -> Any:
             params=params,
             outcome="ok",
             output_paths=output_paths,
+            job_id=result.job_id,
         )
         return {
             "module": module,
+            "job_id": result.job_id,
             "output_paths": output_paths,
             "markdown_bytes": result.markdown_bytes,
             "html_bytes": result.html_bytes,

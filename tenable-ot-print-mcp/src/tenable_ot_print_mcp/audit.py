@@ -36,6 +36,7 @@ class AuditLog:
         params: dict[str, Any] | None = None,
         outcome: str,
         output_paths: list[str] | None = None,
+        job_id: str | None = None,
         error: str | None = None,
     ) -> None:
         """Write one audit row.
@@ -46,6 +47,9 @@ class AuditLog:
             params: job parameters (already redacted of secrets by the caller).
             outcome: 'ok' | 'error'.
             output_paths: rendered file paths, when the job succeeded.
+            job_id: render.py's per-job uniquifier (2026-09-28), when the job
+                succeeded -- lets a `report_job_completed` row be tied back to
+                exactly one job even if several finished the same second.
             error: error message when outcome != 'ok'.
         """
         row: dict[str, Any] = {
@@ -59,6 +63,8 @@ class AuditLog:
             row["params"] = params
         if output_paths:
             row["output_paths"] = output_paths
+        if job_id:
+            row["job_id"] = job_id
         if error:
             row["error"] = error
         line = json.dumps(row, default=str, sort_keys=True) + "\n"

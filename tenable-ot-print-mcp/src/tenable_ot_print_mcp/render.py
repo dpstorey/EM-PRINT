@@ -37,6 +37,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -124,6 +125,7 @@ class RenderResult:
     html_path: Path
     markdown_bytes: int
     html_bytes: int
+    job_id: str
 
 
 def _slugify(text: str) -> str:
@@ -143,8 +145,10 @@ def render_report(
 ) -> RenderResult:
     """Render one module's context through its template + the chosen theme.
 
-    Writes <output_dir>/<module_name>/<timestamp>-<slug>.md (and .html)
-    and returns the paths. Never returns the rendered content itself —
+    Writes <output_dir>/<module_name>/<timestamp>-<job_id>-<slug>.md (and
+    .html) and returns the paths -- `job_id` is a short random hex
+    uniquifier (see the comment at its call site below) so two jobs
+    finishing within the same second never collide on disk. Never returns the rendered content itself —
     callers (the MCP tool) should hand back paths/sizes, not bytes, to
     keep the token-cost guarantee intact (design-notes.md §3.2).
     """
@@ -186,11 +190,28 @@ def render_report(
         extra_css=_theme_css(theme_dir),
     )
 
+    # Per-job uniquifier (2026-09-28, per Dom -- a real bug caught live:
+    # several `submit_report_job` calls against the same module can
+    # finish within the same second, and second-granularity timestamps
+    # alone let their filenames collide, silently overwriting each
+    # other's .md/.html on disk with no error surfaced anywhere -- the
+    # tool's own JSON return looked correct in isolation because it's
+    # built from that job's own in-memory render, not a re-read of
+    # whatever ended up on disk after a later job's write raced past
+    # it). `job_id` makes every job's base filename unique regardless
+    # of timing, and also fixes a latent second bug in retention.py's
+    # `list_report_jobs`, which grouped jobs by `(module, base)` --
+    # two colliding filenames were also two colliding *keys* there, so
+    # a retention purge would have seen one job where there were
+    # several. 8 hex chars (32 bits) keeps collisions negligible even
+    # under a large concurrent burst, without needing any shared
+    # counter/lock across requests.
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    job_id = secrets.token_hex(4)
     slug = _slugify(context.get("report_title", module_name))
     job_dir = output_dir / module_name
     job_dir.mkdir(parents=True, exist_ok=True)
-    base = job_dir / f"{ts}-{slug}"
+    base = job_dir / f"{ts}-{job_id}-{slug}"
 
     md_path = base.with_suffix(".md")
     html_path = base.with_suffix(".html")
@@ -207,4 +228,5 @@ def render_report(
         html_path=html_path,
         markdown_bytes=len(md_bytes),
         html_bytes=len(html_bytes),
+        job_id=job_id,
     )
