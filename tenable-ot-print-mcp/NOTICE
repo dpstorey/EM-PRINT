@@ -4,6 +4,13 @@ Copyright 2026 Dominic Storey
 This product was developed by Dominic Storey.
 Author: Dominic Storey <dstorey@barossafarm.com>.
 
+Portions of this software (the authentication, configuration, server
+bootstrap, self-signed TLS and Tenable GraphQL client modules) are adapted from
+the Tenable OT MCP Server, Copyright 2026 OneClearPath, Incorporated, author
+John Walley <jwalley@1clearpath.com>, licensed under the Apache License,
+Version 2.0 (https://gitlab.com/jwalley/tenable-ot-mcp), as modified by
+Dominic Storey.
+
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this software except in compliance with the License.
 You may obtain a copy of the License at
