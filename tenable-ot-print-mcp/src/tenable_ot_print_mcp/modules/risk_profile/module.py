@@ -882,7 +882,11 @@ class RiskProfileModule(_base.ReportModule):
 
         asset_id = params.get("asset_id")
         if not asset_id or not isinstance(asset_id, str):
-            raise ValueError("asset_id is required and must be a non-empty string.")
+            raise ValueError(
+                "asset_id is required and must be a non-empty string: risk_profile "
+                "covers ONE asset. For an asset report over a subnet or site use "
+                "module 'asset_inventory' (see list_report_types)."
+            )
 
         vuln_severity_at_least = params.get("vuln_severity_at_least")
         if vuln_severity_at_least is not None and vuln_severity_at_least not in _SEVERITY_ORDINAL:
